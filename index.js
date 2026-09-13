@@ -1,12 +1,25 @@
 const express = require("express");
 const fs = require("fs");
+const cors = require("cors");
 
 const app = express();
 const PORT = 3000;
 
+app.use(cors({
+  origin: true,
+  methods: ["GET", "POST", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(express.json());
 
+
 const KNOWLEDGE_FILE = "/root/necbot/knowledge/company.txt";
+
+
+
+
+
 const OLLAMA_URL = "http://127.0.0.1:11434/api/generate";
 
 // --------------------------------------------------

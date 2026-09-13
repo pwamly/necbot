@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <title>NDC Assistant</title>
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+
+<body>
+
+  <div class="app">
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+
+      <div class="brand">
+        <div class="logo">NDC</div>
+
+        <div>
+          <h1>NDC Assistant</h1>
+          <p>National Development Corporation</p>
+        </div>
+      </div>
+
+      <button id="newChat" class="new-chat">
+        <span>＋</span>
+        New conversation
+      </button>
+
+      <div class="sidebar-section">
+        <p class="section-title">Suggested topics</p>
+
+        <button class="topic" data-question="What is NDC?">
+          <span>🏢</span>
+          What is NDC?
+        </button>
+
+        <button class="topic" data-question="What are the objectives of NDC?">
+          <span>🎯</span>
+          NDC objectives
+        </button>
+
+        <button class="topic" data-question="What projects does NDC have?">
+          <span>🏗️</span>
+          NDC projects
+        </button>
+
+        <button class="topic" data-question="How can I contact NDC?">
+          <span>📞</span>
+          Contact NDC
+        </button>
+
+        <button class="topic" data-question="How can I become an NDC investor?">
+          <span>💼</span>
+          Investment
+        </button>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="status">
+          <span class="status-dot"></span>
+          Assistant online
+        </div>
+
+        <p>Powered by NDC Knowledge Assistant</p>
+      </div>
+
+    </aside>
+
+
+    <!-- Main Chat -->
+    <main class="chat">
+
+      <!-- Header -->
+      <header class="chat-header">
+
+        <div class="mobile-brand">
+          <div class="logo small">NDC</div>
+
+          <div>
+            <strong>NDC Assistant</strong>
+            <span>National Development Corporation</span>
+          </div>
+        </div>
+
+        <div class="header-actions">
+          <button id="clearChat" title="Clear conversation">
+            Clear
+          </button>
+        </div>
+
+      </header>
+
+
+      <!-- Messages -->
+      <section id="messages" class="messages">
+
+        <!-- Welcome screen -->
+        <div id="welcome" class="welcome">
+
+          <div class="welcome-logo">NDC</div>
+
+          <h2>How can I help you?</h2>
+
+          <p>
+            Ask questions about the National Development Corporation,
+            its projects, investment opportunities and industrial
+            development activities.
+          </p>
+
+          <div class="suggestions">
+
+            <button data-question="What is NDC?">
+              <strong>What is NDC?</strong>
+              <span>Learn about NDC</span>
+            </button>
+
+            <button data-question="What are the objectives of NDC?">
+              <strong>What are the objectives?</strong>
+              <span>Understand NDC's role</span>
+            </button>
+
+            <button data-question="What projects does NDC have?">
+              <strong>What projects does NDC have?</strong>
+              <span>Explore major projects</span>
+            </button>
+
+            <button data-question="How can I contact NDC?">
+              <strong>How can I contact NDC?</strong>
+              <span>Contact information</span>
+            </button>
+
+          </div>
+
+        </div>
+
+      </section>
+
+
+      <!-- Input -->
+      <footer class="input-area">
+
+        <div class="input-wrapper">
+
+          <textarea
+            id="question"
+            rows="1"
+            placeholder="Ask NDC Assistant..."
+            autocomplete="off"
+          ></textarea>
+
+          <button id="sendButton" class="send-button" title="Send">
+            ➤
+          </button>
+
+        </div>
+
+        <p class="disclaimer">
+          NDC Assistant can make mistakes. Check official NDC sources
+          for important or current information.
+        </p>
+
+      </footer>
+
+    </main>
+
+  </div>
+
+  <script src="app.js"></script>
+
+</body>
+</html>
