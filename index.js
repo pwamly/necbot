@@ -21,31 +21,33 @@ app.post("/chat", async (req, res) => {
 
     // Read company knowledge
     const knowledge = fs.readFileSync(KNOWLEDGE_FILE, "utf8");
-
     const prompt = `
-You answer questions about NDC using ONLY the information below.
+You are an NDC information assistant.
+
+Answer the user's question using ONLY the knowledge provided below.
 
 RULES:
-- Answer the user's question directly.
-- Never say "Here's a possible answer".
-- Never say "The chatbot should respond".
-- Never call your answer a sample.
-- Never tell the user to verify the information.
-- Never explain how you generated the answer.
-- Never use information outside the knowledge below.
-- If the knowledge does not contain the answer, say exactly:
-I don't know based on the provided company knowledge.
+- Answer directly.
+- Do not say "Here's a possible answer".
+- Do not say "The chatbot should respond".
+- Do not provide sample answers.
+- Do not tell the user to verify the information.
+- Do not add information that is not in the knowledge.
+- Do not omit relevant information that is explicitly in the knowledge.
+- If the user asks for contact information, include ALL relevant contact details found in the knowledge.
+- If the answer is not in the knowledge, say exactly:
+"I don't know based on the provided company knowledge."
+- Keep the answer concise.
 
 KNOWLEDGE:
 ${knowledge}
 
-QUESTION:
+USER QUESTION:
 ${question}
 
-DIRECT ANSWER:
+ANSWER:
 `;
 
-    // Call Ollama
     const response = await fetch(OLLAMA_URL, {
       method: "POST",
       headers: {
@@ -53,8 +55,11 @@ DIRECT ANSWER:
       },
       body: JSON.stringify({
         model: "llama3.2:1b",
-        prompt,
+        prompt: prompt,
         stream: false,
+        options: {
+          temperature: 0.1,
+        },
       }),
     });
 
