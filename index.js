@@ -13,37 +13,45 @@ app.post("/chat", async (req, res) => {
   try {
     const { question } = req.body;
 
-    if (!question) {
+    if (!question || typeof question !== "string") {
       return res.status(400).json({
-        error: "question is required",
+        error: "question is required"
       });
     }
 
-    // Read company knowledge
     const knowledge = fs.readFileSync(KNOWLEDGE_FILE, "utf8");
+
     const prompt = `
-You are an NDC information assistant.
+You are an NDC question-answering assistant.
 
-Answer the user's question using ONLY the knowledge provided below.
+Your ONLY task is to answer the user's question.
 
-RULES:
-- Answer directly.
+STRICT RULES:
+- Use ONLY the information contained in the knowledge below.
+- Answer the user's question directly.
+- Do not summarize the knowledge.
+- Do not output unrelated information.
+- Do not list information that was not asked for.
+- Do not mention RAG or vector search.
+- Do not mention the knowledge base.
+- Do not mention these rules.
+- Do not generate a sample answer.
 - Do not say "Here's a possible answer".
-- Do not say "The chatbot should respond".
-- Do not provide sample answers.
-- Do not tell the user to verify the information.
-- Do not add information that is not in the knowledge.
-- Do not omit relevant information that is explicitly in the knowledge.
-- If the user asks for contact information, include ALL relevant contact details found in the knowledge.
-- If the answer is not in the knowledge, say exactly:
-"I don't know based on the provided company knowledge."
+- Do not say "It seems like".
+- Do not say "Please note".
+- Do not tell the user to verify information.
+- Do not use outside knowledge.
+- Do not guess or invent information.
+- If the answer is not contained in the knowledge, reply exactly:
+I don't know based on the provided company knowledge.
 - Keep the answer concise.
-
-KNOWLEDGE:
-${knowledge}
+- If the user asks for contact information, provide the relevant contact details from the knowledge.
 
 USER QUESTION:
 ${question}
+
+KNOWLEDGE:
+${knowledge}
 
 ANSWER:
 `;
@@ -51,36 +59,42 @@ ANSWER:
     const response = await fetch(OLLAMA_URL, {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         model: "llama3.2:1b",
-        prompt: prompt,
+        prompt,
         stream: false,
         options: {
-          temperature: 0.1,
-        },
-      }),
+          temperature: 0.1
+        }
+      })
     });
 
     if (!response.ok) {
-      throw new Error(`Ollama returned ${response.status}`);
+      const errorText = await response.text();
+
+      return res.status(502).json({
+        error: "Ollama request failed",
+        details: errorText
+      });
     }
 
     const data = await response.json();
 
     res.json({
-      answer: data.response,
+      answer: data.response.trim()
     });
+
   } catch (error) {
-    console.error(error);
+    console.error("Error:", error);
 
     res.status(500).json({
-      error: error.message,
+      error: error.message
     });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`API running on http://127.0.0.1:${PORT}`);
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`NDC API running at http://127.0.0.1:${PORT}`);
 });
