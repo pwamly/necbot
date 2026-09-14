@@ -1,7 +1,6 @@
 // const API_URL = "http://127.0.0.1:3000/chat";
 
-API_URL = "/chat";
-
+const API_URL = "/chat";
 
 const messages = document.getElementById("messages");
 const questionInput = document.getElementById("question");
