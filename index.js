@@ -37,8 +37,8 @@ app.use(express.json());
 // CONFIGURATION
 // --------------------------------------------------
 
-// const KNOWLEDGE_FILE = "/root/necbot/knowledge/company.txt";
-const KNOWLEDGE_FILE = "knowledge/company.txt";
+const KNOWLEDGE_FILE = "/root/necbot/knowledge/company.txt";
+// const KNOWLEDGE_FILE = "knowledge/company.txt";
 const OLLAMA_URL = "http://127.0.0.1:11434/api/generate";
 
 const MODEL = "qwen2.5:1.5b";
