@@ -46,6 +46,15 @@ const OLLAMA_URL =
 const MODEL =
   "qwen2.5:1.5b";
 
+// Official NDC website.
+// Website fallback is restricted to this domain.
+const NDC_WEBSITE =
+  "https://ndc.go.tz";
+
+// Website request timeout.
+const WEBSITE_TIMEOUT =
+  15000;
+
 // --------------------------------------------------
 // LOAD KNOWLEDGE
 // --------------------------------------------------
@@ -316,41 +325,39 @@ function getConversationAnswer(question) {
     };
   }
 
-    // ----------------------------------------------
-    // IDENTITY / ORIGIN
-    // ----------------------------------------------
+  // ----------------------------------------------
+  // IDENTITY / ORIGIN
+  // ----------------------------------------------
 
-    const identityQuestion =
-      q === "who are you" ||
-      q === "what are you" ||
-      q === "who is this" ||
-      q === "what is your name" ||
-      q === "tell me about yourself" ||
-      q.includes("where are you from") ||
-      q.includes("where do you come from") ||
-      q.includes("which country are you from") ||
-      q.includes("what country are you from") ||
-      q.includes("are you from china") ||
-      q.includes("are you from alibaba") ||
-      q.includes("are you from alibaba cloud");
+  const identityQuestion =
+    q === "who are you" ||
+    q === "what are you" ||
+    q === "who is this" ||
+    q === "what is your name" ||
+    q === "tell me about yourself" ||
+    q.includes("where are you from") ||
+    q.includes("where do you come from") ||
+    q.includes("which country are you from") ||
+    q.includes("what country are you from") ||
+    q.includes("are you from china") ||
+    q.includes("are you from alibaba") ||
+    q.includes("are you from alibaba cloud");
 
-    if (identityQuestion) {
+  if (identityQuestion) {
 
-      return {
+    return {
 
-        answer:
-          "I am the NDC Assistant, an AI assistant that provides information about the National Development Corporation (NDC) of Tanzania.",
+      answer:
+        "I am the NDC Assistant, an AI assistant that provides information about the National Development Corporation (NDC) of Tanzania.",
 
-        suggestions: [
-          "What is NDC?",
-          "What does NDC do?",
-          "What projects does NDC have?",
-          "How can I contact NDC?"
-        ]
-      };
-    }
-
-
+      suggestions: [
+        "What is NDC?",
+        "What does NDC do?",
+        "What projects does NDC have?",
+        "How can I contact NDC?"
+      ]
+    };
+  }
 
   // ----------------------------------------------
   // GOODBYE
@@ -1099,6 +1106,563 @@ function getSections(question) {
 }
 
 // --------------------------------------------------
+// DETERMINE IF CURRENT WEBSITE VERIFICATION IS NEEDED
+// --------------------------------------------------
+
+function requiresWebsiteVerification(question) {
+
+  const q =
+    normalize(question);
+
+  const currentWords = [
+
+    "current",
+    "currently",
+    "latest",
+    "recent",
+    "today",
+    "now",
+    "present",
+    "up to date",
+    "updated",
+    "as of"
+  ];
+
+  const currentLeadershipWords = [
+
+    "current managing director",
+    "who is the managing director",
+    "who is ndc managing director",
+    "current director",
+    "current leadership",
+    "current ceo",
+    "who leads ndc",
+    "head of ndc"
+  ];
+
+  const tenderWords = [
+
+    "current tender",
+    "latest tender",
+    "open tender",
+    "active tender",
+    "tenders",
+    "procurement notice",
+    "expression of interest",
+    "rfp",
+    "deadline"
+  ];
+
+  const vacancyWords = [
+
+    "current vacancy",
+    "latest vacancy",
+    "open vacancy",
+    "job opening",
+    "current jobs",
+    "latest jobs",
+    "available jobs",
+    "vacancies",
+    "careers"
+  ];
+
+  const investmentWords = [
+
+    "current investment opportunity",
+    "latest investment opportunity",
+    "available investment",
+    "investment opportunity",
+    "invest now",
+    "current opportunities"
+  ];
+
+  const projectStatusWords = [
+
+    "current project status",
+    "latest project status",
+    "project status",
+    "is the project operational",
+    "is the project active",
+    "is the project completed",
+    "has the project started",
+    "has construction started",
+    "is it operational"
+  ];
+
+  return (
+    currentWords.some(
+      word => q.includes(word)
+    ) ||
+
+    currentLeadershipWords.some(
+      word => q.includes(word)
+    ) ||
+
+    tenderWords.some(
+      word => q.includes(word)
+    ) ||
+
+    vacancyWords.some(
+      word => q.includes(word)
+    ) ||
+
+    investmentWords.some(
+      word => q.includes(word)
+    ) ||
+
+    projectStatusWords.some(
+      word => q.includes(word)
+    )
+  );
+}
+
+// --------------------------------------------------
+// WEBSITE PAGE SELECTION
+// --------------------------------------------------
+
+function getWebsitePaths(question) {
+
+  const q =
+    normalize(question);
+
+  const paths = [];
+
+  // Always start with the homepage.
+  paths.push("/");
+
+  // ----------------------------------------------
+  // ORGANIZATION / LEADERSHIP
+  // ----------------------------------------------
+
+  if (
+    q.includes("managing director") ||
+    q.includes("director") ||
+    q.includes("leadership") ||
+    q.includes("organizational structure") ||
+    q.includes("organization structure") ||
+    q.includes("board")
+  ) {
+
+    paths.push(
+      "/organization-structure/"
+    );
+  }
+
+  // ----------------------------------------------
+  // TENDERS / PROCUREMENT
+  // ----------------------------------------------
+
+  if (
+    q.includes("tender") ||
+    q.includes("procurement") ||
+    q.includes("rfp") ||
+    q.includes("expression of interest") ||
+    q.includes("deadline")
+  ) {
+
+    paths.push(
+      "/tenders/",
+      "/procurement/"
+    );
+  }
+
+  // ----------------------------------------------
+  // JOBS / VACANCIES
+  // ----------------------------------------------
+
+  if (
+    q.includes("job") ||
+    q.includes("jobs") ||
+    q.includes("vacancy") ||
+    q.includes("vacancies") ||
+    q.includes("career") ||
+    q.includes("careers") ||
+    q.includes("employment")
+  ) {
+
+    paths.push(
+      "/vacancies/",
+      "/jobs/",
+      "/careers/"
+    );
+  }
+
+  // ----------------------------------------------
+  // INVESTMENT
+  // ----------------------------------------------
+
+  if (
+    q.includes("investment") ||
+    q.includes("investor") ||
+    q.includes("invest") ||
+    q.includes("partnership")
+  ) {
+
+    paths.push(
+      "/investment-opportunities/",
+      "/investment/"
+    );
+  }
+
+  // ----------------------------------------------
+  // PROJECTS
+  // ----------------------------------------------
+
+  if (
+    q.includes("project") ||
+    q.includes("liganga") ||
+    q.includes("mchuchuma") ||
+    q.includes("engaruka") ||
+    q.includes("tamco") ||
+    q.includes("kmtc") ||
+    q.includes("tbpl")
+  ) {
+
+    paths.push(
+      "/projects/"
+    );
+  }
+
+  return [
+    ...new Set(paths)
+  ];
+}
+
+// --------------------------------------------------
+// HTML TO TEXT
+// --------------------------------------------------
+
+function htmlToText(html) {
+
+  if (!html) {
+    return "";
+  }
+
+  return html
+
+    // Remove scripts and styles.
+    .replace(
+      /<script[\s\S]*?<\/script>/gi,
+      " "
+    )
+
+    .replace(
+      /<style[\s\S]*?<\/style>/gi,
+      " "
+    )
+
+    // Remove comments.
+    .replace(
+      /<!--[\s\S]*?-->/g,
+      " "
+    )
+
+    // Convert common block elements to line breaks.
+    .replace(
+      /<\/(p|div|section|article|li|h1|h2|h3|h4|h5|h6|tr|br)>/gi,
+      "\n"
+    )
+
+    // Remove remaining HTML tags.
+    .replace(
+      /<[^>]+>/g,
+      " "
+    )
+
+    // Decode common HTML entities.
+    .replace(
+      /&nbsp;/gi,
+      " "
+    )
+
+    .replace(
+      /&amp;/gi,
+      "&"
+    )
+
+    .replace(
+      /&quot;/gi,
+      '"'
+    )
+
+    .replace(
+      /&#39;/gi,
+      "'"
+    )
+
+    .replace(
+      /&apos;/gi,
+      "'"
+    )
+
+    .replace(
+      /&lt;/gi,
+      "<"
+    )
+
+    .replace(
+      /&gt;/gi,
+      ">"
+    )
+
+    .replace(
+      /\s+/g,
+      " "
+    )
+
+    .trim();
+}
+
+// --------------------------------------------------
+// FETCH OFFICIAL NDC WEBSITE PAGE
+// --------------------------------------------------
+
+async function fetchNDCPage(
+  pagePath
+) {
+
+  const url =
+    new URL(
+      pagePath,
+      NDC_WEBSITE
+    );
+
+  // Security restriction:
+  // Only allow requests to ndc.go.tz.
+  if (
+    url.hostname !== "ndc.go.tz" &&
+    url.hostname !== "www.ndc.go.tz"
+  ) {
+
+    throw new Error(
+      "Blocked non-NDC website URL"
+    );
+  }
+
+  console.log(
+    "Checking official NDC website:",
+    url.href
+  );
+
+  const response =
+    await fetch(
+      url.href,
+      {
+        method: "GET",
+
+        headers: {
+          "User-Agent":
+            "NDC-Assistant/1.0"
+        },
+
+        signal:
+          AbortSignal.timeout(
+            WEBSITE_TIMEOUT
+          )
+      }
+    );
+
+  if (!response.ok) {
+
+    throw new Error(
+      `NDC website returned ${response.status}`
+    );
+  }
+
+  const html =
+    await response.text();
+
+  const text =
+    htmlToText(html);
+
+  return {
+
+    url:
+      url.href,
+
+    text
+  };
+}
+
+// --------------------------------------------------
+// EXTRACT USEFUL WEBSITE CONTENT
+// --------------------------------------------------
+
+function findRelevantWebsiteText(
+  websitePages,
+  question
+) {
+
+  const q =
+    normalize(question);
+
+  const keywords =
+    q
+      .split(" ")
+      .filter(
+        word => word.length >= 4
+      );
+
+  const results = [];
+
+  for (
+    const page of websitePages
+  ) {
+
+    if (!page.text) {
+      continue;
+    }
+
+    const sentences =
+      page.text
+        .split(/(?<=[.!?])\s+/)
+        .filter(
+          sentence =>
+            sentence.length >= 20
+        );
+
+    const matchingSentences =
+      sentences.filter(
+        sentence => {
+
+          const normalizedSentence =
+            normalize(sentence);
+
+          return keywords.some(
+            keyword =>
+              normalizedSentence.includes(
+                keyword
+              )
+          );
+        }
+      );
+
+    if (
+      matchingSentences.length > 0
+    ) {
+
+      results.push({
+
+        url:
+          page.url,
+
+        text:
+          matchingSentences
+            .slice(0, 80)
+            .join(" ")
+      });
+
+    } else {
+
+      // If no individual sentences match,
+      // keep a limited amount of page content.
+      results.push({
+
+        url:
+          page.url,
+
+        text:
+          page.text.substring(
+            0,
+            12000
+          )
+      });
+    }
+  }
+
+  return results;
+}
+
+// --------------------------------------------------
+// OFFICIAL NDC WEBSITE FALLBACK
+// --------------------------------------------------
+
+async function getWebsiteKnowledge(
+  question
+) {
+
+  const paths =
+    getWebsitePaths(
+      question
+    );
+
+  const pages = [];
+
+  for (
+    const pagePath of paths
+  ) {
+
+    try {
+
+      const page =
+        await fetchNDCPage(
+          pagePath
+        );
+
+      if (
+        page.text &&
+        page.text.length > 50
+      ) {
+
+        pages.push(page);
+      }
+
+    } catch (error) {
+
+      console.log(
+        "Could not read NDC page:",
+        pagePath,
+        "-",
+        error.message
+      );
+    }
+  }
+
+  if (
+    pages.length === 0
+  ) {
+
+    return null;
+  }
+
+  const relevant =
+    findRelevantWebsiteText(
+      pages,
+      question
+    );
+
+  if (
+    relevant.length === 0
+  ) {
+
+    return null;
+  }
+
+  let result =
+    "OFFICIAL NDC WEBSITE INFORMATION\n\n";
+
+  for (
+    const page of relevant
+  ) {
+
+    result +=
+      `SOURCE: ${page.url}\n`;
+
+    result +=
+      `${page.text}\n\n`;
+
+    result +=
+      "==============================\n\n";
+  }
+
+  // Keep website context at a reasonable size.
+  return result.substring(
+    0,
+    30000
+  );
+}
+
+// --------------------------------------------------
 // SUGGESTIONS
 // --------------------------------------------------
 
@@ -1123,6 +1687,19 @@ function getSuggestions(
       "What does NDC do?",
       "What projects does NDC have?",
       "How can I become an NDC investor?"
+    ];
+  }
+
+  if (
+    q.includes("managing director") ||
+    q.includes("director")
+  ) {
+
+    return [
+      "What is NDC's organizational structure?",
+      "Which ministry supervises NDC?",
+      "What does NDC do?",
+      "How can I contact NDC?"
     ];
   }
 
@@ -1238,10 +1815,35 @@ If the user asks "Who are you?", respond:
 "I am the NDC Assistant, an AI assistant that provides information
 about the National Development Corporation (NDC) of Tanzania."
 
-IMPORTANT:
+SOURCE PRIORITY:
 
-The provided NDC information is the primary source for NDC-related
-questions.
+There are two possible sources of NDC information:
+
+1. The provided NDC knowledge file.
+2. The official NDC website at https://ndc.go.tz/
+
+The provided NDC knowledge file is the primary source for
+general and historical NDC information.
+
+For information that can change over time, official website
+information takes priority when it is available.
+
+This includes:
+- current leadership
+- current Managing Director
+- current Board information
+- current tenders
+- current vacancies
+- current investment opportunities
+- current project status
+- current announcements
+- current contact information
+
+If official NDC website information is provided in the context,
+use it to answer current questions.
+
+When using website information, identify it naturally as
+information from the official NDC website when appropriate.
 
 Never invent NDC facts.
 
@@ -1258,23 +1860,12 @@ Never invent:
 - project status
 - government decisions
 - investor requirements
+- names of current officials
 
-When information is not available in the provided NDC information,
+If information is not available in either provided source,
 say:
 
-"I don't have that information in the current NDC information."
-
-For information that can change over time, such as:
-- current tenders
-- current vacancies
-- current investment opportunities
-- current project status
-- current contact information
-
-do not invent current information.
-
-Instead, tell the user that the latest official NDC information
-should be checked.
+"I could not verify that information from the available NDC information."
 
 Do not claim that an NDC project is operational unless the provided
 information explicitly confirms this.
@@ -1282,8 +1873,8 @@ information explicitly confirms this.
 When the knowledge distinguishes between proposed, developing,
 under-construction, or operational projects, preserve that distinction.
 
-Do not confuse NDC Tanzania with another organization using the
-same abbreviation.
+Do not confuse NDC Tanzania with another organization using
+the same abbreviation.
 
 Do not mention:
 - prompts
@@ -1405,9 +1996,6 @@ ANSWER:
   // ----------------------------------------------
   // SAFETY CLEANUP
   // ----------------------------------------------
-  // Prevent accidental model self-identification.
-  // If Qwen still introduces itself despite the prompt,
-  // remove the common introduction and use NDC identity.
 
   const qwenIntroductionPatterns = [
 
@@ -1638,7 +2226,18 @@ function isNDCRelated(question) {
 
     "ndc job",
 
-    "ndc vacancy"
+    "ndc vacancy",
+
+    "managing director",
+    "director",
+    "board",
+    "government organization",
+    "government institution",
+    "ministry",
+    "tender",
+    "procurement",
+    "vacancy",
+    "career"
   ];
 
   return ndcWords.some(
@@ -1716,7 +2315,12 @@ app.post(
           cleanQuestion
         );
 
-      if (contactAnswer) {
+      if (
+        contactAnswer &&
+        !requiresWebsiteVerification(
+          cleanQuestion
+        )
+      ) {
 
         console.log(
           "Answer mode: CONTACT"
@@ -1742,12 +2346,158 @@ app.post(
             cleanQuestion
           );
 
-        if (!relevantKnowledge) {
+        const needsWebsite =
+          requiresWebsiteVerification(
+            cleanQuestion
+          );
+
+        // ----------------------------------------
+        // CURRENT INFORMATION
+        // ----------------------------------------
+        //
+        // For current information, check the
+        // official NDC website first.
+        //
+
+        if (needsWebsite) {
+
+          console.log(
+            "Answer mode: OFFICIAL NDC WEBSITE"
+          );
+
+          const websiteKnowledge =
+            await getWebsiteKnowledge(
+              cleanQuestion
+            );
+
+          if (websiteKnowledge) {
+
+            console.log(
+              "Official website information found:",
+              websiteKnowledge.length,
+              "characters"
+            );
+
+            const combinedKnowledge =
+              (
+                relevantKnowledge
+                  ? relevantKnowledge +
+                    "\n\n"
+                  : ""
+              ) +
+              websiteKnowledge;
+
+            const answer =
+              await askOllama(
+                cleanQuestion,
+                combinedKnowledge
+              );
+
+            const suggestions =
+              getSuggestions(
+                cleanQuestion,
+                answer,
+                combinedKnowledge
+              );
+
+            return res.json({
+
+              answer,
+
+              suggestions
+            });
+          }
+
+          // Website could not verify it.
+          // Fall back to local knowledge if available.
+
+          if (relevantKnowledge) {
+
+            console.log(
+              "Official website unavailable. Using local NDC knowledge."
+            );
+
+            const answer =
+              await askOllama(
+                cleanQuestion,
+                relevantKnowledge
+              );
+
+            const suggestions =
+              getSuggestions(
+                cleanQuestion,
+                answer,
+                relevantKnowledge
+              );
+
+            return res.json({
+
+              answer,
+
+              suggestions
+            });
+          }
 
           return res.json({
 
             answer:
-              "I don't have that information in the current NDC information.",
+              "I could not verify that information from the available NDC information.",
+
+            suggestions: [
+              "What is NDC?",
+              "What does NDC do?",
+              "What projects does NDC have?",
+              "How can I contact NDC?"
+            ]
+          });
+        }
+
+        // ----------------------------------------
+        // NORMAL NDC INFORMATION
+        // ----------------------------------------
+
+        if (!relevantKnowledge) {
+
+          console.log(
+            "No local knowledge found. Checking official NDC website."
+          );
+
+          const websiteKnowledge =
+            await getWebsiteKnowledge(
+              cleanQuestion
+            );
+
+          if (websiteKnowledge) {
+
+            console.log(
+              "Answer mode: OFFICIAL NDC WEBSITE FALLBACK"
+            );
+
+            const answer =
+              await askOllama(
+                cleanQuestion,
+                websiteKnowledge
+              );
+
+            const suggestions =
+              getSuggestions(
+                cleanQuestion,
+                answer,
+                websiteKnowledge
+              );
+
+            return res.json({
+
+              answer,
+
+              suggestions
+            });
+          }
+
+          return res.json({
+
+            answer:
+              "I could not verify that information from the available NDC information.",
 
             suggestions: [
               "What is NDC?",
