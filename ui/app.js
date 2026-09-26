@@ -1,3 +1,4 @@
+
 // const API_URL = "http://127.0.0.1:3000/chat";
 
 // const API_URL = "/chat";
@@ -92,6 +93,8 @@ async function sendQuestion(question) {
         "assistant",
         data.answer
       );
+
+      // Display suggestions returned by backend
       renderSuggestions(data.suggestions);
 
     } else {
@@ -124,30 +127,69 @@ async function sendQuestion(question) {
   }
 }
 
+
+/* ==========================================
+   RESPONSE SUGGESTIONS
+========================================== */
+
 function renderSuggestions(suggestions) {
-  if (!suggestions || !Array.isArray(suggestions) || suggestions.length === 0) {
+
+  if (
+    !suggestions ||
+    !Array.isArray(suggestions) ||
+    suggestions.length === 0
+  ) {
     return;
   }
 
   const container = document.createElement("div");
-  container.className = "response-suggestions";
+
+  /*
+   * Use both classes so the existing
+   * .suggestions styling can be reused.
+   */
+  container.className =
+    "suggestions response-suggestions";
+
 
   suggestions.forEach((suggestion) => {
-    const button = document.createElement("button");
 
-    button.className = "response-suggestion";
-    button.textContent = suggestion;
+    const button =
+      document.createElement("button");
 
-    button.addEventListener("click", () => {
-      questionInput.value = suggestion;
-      sendMessage();
-    });
+    button.className =
+      "response-suggestion";
+
+    button.type = "button";
+
+    button.textContent =
+      suggestion;
+
+
+    button.addEventListener(
+      "click",
+      () => {
+
+        /*
+         * Send the selected suggestion directly.
+         *
+         * Do NOT use sendMessage().
+         * The actual function is sendQuestion().
+         */
+        sendQuestion(suggestion);
+
+      }
+    );
+
 
     container.appendChild(button);
+
   });
 
+
   messages.appendChild(container);
-  messages.scrollTop = messages.scrollHeight;
+
+  scrollToBottom();
 }
 
 
