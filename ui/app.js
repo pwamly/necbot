@@ -149,7 +149,7 @@ function renderSuggestions(suggestions) {
    * .suggestions styling can be reused.
    */
 
-  container.className = "response-suggestions";
+  container.className = "suggestions";
 
 
   suggestions.forEach((suggestion) => {

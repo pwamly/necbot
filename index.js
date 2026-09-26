@@ -805,7 +805,6 @@ function getSuggestions(question) {
         return [
             'Who is the Managing Director of NDC?',
             'List all NDC directors',
-            'Who is Ms. Esther Mwaigomole?',
             'Who is the Director of Heavy Industries?'
         ];
     }
