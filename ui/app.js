@@ -92,6 +92,7 @@ async function sendQuestion(question) {
         "assistant",
         data.answer
       );
+      renderSuggestions(data.suggestions);
 
     } else {
 
@@ -121,6 +122,32 @@ async function sendQuestion(question) {
 
     questionInput.focus();
   }
+}
+
+function renderSuggestions(suggestions) {
+  if (!suggestions || !Array.isArray(suggestions) || suggestions.length === 0) {
+    return;
+  }
+
+  const container = document.createElement("div");
+  container.className = "response-suggestions";
+
+  suggestions.forEach((suggestion) => {
+    const button = document.createElement("button");
+
+    button.className = "response-suggestion";
+    button.textContent = suggestion;
+
+    button.addEventListener("click", () => {
+      questionInput.value = suggestion;
+      sendMessage();
+    });
+
+    container.appendChild(button);
+  });
+
+  messages.appendChild(container);
+  messages.scrollTop = messages.scrollHeight;
 }
 
 
