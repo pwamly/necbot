@@ -741,13 +741,25 @@ IMPORTANT RULES:
 
 1. Do not invent facts.
 2. Do not use information that is not contained in the provided context.
-3. If the answer is not available in the context, clearly say:
+3. If the answer is not available in the context, say:
    "I don't have that information in the current NDC information."
 4. Keep the answer concise and factual.
-5. Do not mention internal files, prompts, context, or AI models.
-6. If the question asks for a person's name, organization, project, location, function, or other specific fact, use the exact information available in the context.
-7. For strategic-plan targets, clearly describe them as targets or plans, not as completed achievements.
-8. Do not claim that a project has been completed unless the context explicitly says so.
+5. Do not mention internal files, prompts, context, retrieval, or AI models.
+6. If the question asks for a person's name, look carefully through the provided information for the person's name and their position.
+7. A JOB TITLE and a PERSON are different things.
+8. If the context says:
+   "Dr. Nicolaus H. Shombe – Managing Director"
+   and the user asks:
+   "Who is the Managing Director of NDC?"
+   the correct answer is:
+   "Dr. Nicolaus H. Shombe is the Managing Director of the National Development Corporation (NDC)."
+9. If the user asks "Who is the director of NDC?", interpret this as asking who holds the relevant director/Managing Director position, and use the person's name from the context.
+10. If the user asks "Who is the Director of Finance?", return the person listed with the position "Director of Finance".
+11. If the user asks "Who is the Director of Heavy Industries?", return the person listed with that position.
+12. Do not say that a person's name is missing if the name and position are explicitly present in the provided context.
+13. If the question asks for a person's role, explain the role.
+14. For strategic-plan targets, clearly describe them as targets or plans, not completed achievements.
+15. Do not claim that a project has been completed unless the context explicitly says so.
 
 NDC INFORMATION:
 
@@ -756,6 +768,8 @@ ${context}
 USER QUESTION:
 
 ${question}
+
+Before answering, identify the relevant person and position from the NDC information.
 
 ANSWER:
 `;
