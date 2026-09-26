@@ -5,2624 +5,921 @@ const https = require("https");
 const cors = require("cors");
 
 const app = express();
-const PORT = 3000;
 
-// --------------------------------------------------
-// HTTPS CERTIFICATE
-// --------------------------------------------------
-
-const HTTPS_OPTIONS = {
-  key: fs.readFileSync(
-    path.join(__dirname, "cert", "server.key")
-  ),
-
-  cert: fs.readFileSync(
-    path.join(__dirname, "cert", "server.crt")
-  )
-};
-
-// --------------------------------------------------
-// CORS
-// --------------------------------------------------
-
-app.use(cors({
-  origin: true,
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"]
-}));
-
+app.use(cors());
 app.use(express.json());
 
-// --------------------------------------------------
-// CONFIGURATION
-// --------------------------------------------------
+const PORT = 3000;
 
-const KNOWLEDGE_FILE =
-  "/root/necbot/knowledge/company.txt";
+const KNOWLEDGE_FILE = "/root/necbot/knowledge/company.txt";
 
-const OLLAMA_URL =
-  "http://127.0.0.1:11434/api/generate";
+const OLLAMA_URL = "http://127.0.0.1:11434/api/generate";
+const OLLAMA_MODEL = "qwen2.5:1.5b";
 
-const MODEL =
-  "qwen2.5:1.5b";
+// ============================================================
+// LOAD KNOWLEDGE BASE
+// ============================================================
 
-// Official NDC website.
-// Website fallback is restricted to this domain.
-const NDC_WEBSITE =
-  "https://ndc.go.tz";
-
-// Website request timeout.
-const WEBSITE_TIMEOUT =
-  15000;
-
-// --------------------------------------------------
-// LOAD KNOWLEDGE
-// --------------------------------------------------
-
-let knowledge;
+let knowledge = "";
 
 try {
-
-  knowledge =
-    fs.readFileSync(
-      KNOWLEDGE_FILE,
-      "utf8"
-    );
-
-  console.log(
-    "Knowledge loaded:",
-    knowledge.length,
-    "characters"
-  );
-
+    knowledge = fs.readFileSync(KNOWLEDGE_FILE, "utf8");
+    console.log(`Knowledge loaded: ${knowledge.length} characters`);
 } catch (error) {
-
-  console.error(
-    "Could not load knowledge file:",
-    error
-  );
-
-  process.exit(1);
+    console.error("Failed to load knowledge file:", error.message);
 }
 
-// --------------------------------------------------
-// NORMALIZE
-// --------------------------------------------------
+// ============================================================
+// NORMALIZE TEXT
+// ============================================================
 
 function normalize(text) {
-
-  return text
-    .toLowerCase()
-    .replace(/[?.,!;:()[\]{}"'`]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    return String(text || "")
+        .toLowerCase()
+        .replace(/[^\w\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
 }
 
-// --------------------------------------------------
-// EXTRACT SECTION
-// --------------------------------------------------
+// ============================================================
+// EXTRACT SECTIONS FROM company.txt
+// ============================================================
 
-function extractSection(
-  text,
-  sectionTitle
-) {
+function extractSections(text) {
+    const sections = {};
 
-  const start =
-    text.indexOf(sectionTitle);
+    const regex = /^(\d+)\.\s+(.+)$/gm;
 
-  if (start === -1) {
-    return "";
-  }
+    const matches = [...text.matchAll(regex)];
 
-  const remaining =
-    text.substring(
-      start + sectionTitle.length
-    );
+    for (let i = 0; i < matches.length; i++) {
+        const number = matches[i][1];
+        const title = matches[i][2].trim();
 
-  const nextSeparator =
-    remaining.search(/\n={10,}/);
+        const start = matches[i].index + matches[i][0].length;
 
-  if (nextSeparator === -1) {
+        const end =
+            i + 1 < matches.length
+                ? matches[i + 1].index
+                : text.length;
 
-    return (
-      sectionTitle +
-      "\n" +
-      remaining.trim()
-    );
-  }
+        const content = text.substring(start, end).trim();
 
-  return (
-    sectionTitle +
-    "\n" +
-    remaining
-      .substring(0, nextSeparator)
-      .trim()
-  );
+        sections[`${number}. ${title}`] = content;
+    }
+
+    return sections;
 }
 
-// --------------------------------------------------
+const sections = extractSections(knowledge);
+
+console.log(`Knowledge sections loaded: ${Object.keys(sections).length}`);
+
+// ============================================================
 // ADD SECTION
-// --------------------------------------------------
+// ============================================================
 
-function addSection(
-  sections,
-  title
-) {
-
-  const section =
-    extractSection(
-      knowledge,
-      title
+function addSection(result, sectionName) {
+    const key = Object.keys(sections).find(
+        key => normalize(key) === normalize(sectionName)
     );
 
-  if (
-    section &&
-    !sections.includes(section)
-  ) {
-
-    sections.push(section);
-  }
+    if (key && !result.includes(key)) {
+        result.push(key);
+    }
 }
 
-// --------------------------------------------------
-// CONTACT DETECTION
-// --------------------------------------------------
-
-function getContactAnswer(question) {
-
-  const q =
-    normalize(question);
-
-  const asksEmail =
-    q.includes("email") ||
-    q.includes("e mail") ||
-    q.includes("mail address");
-
-  const asksPhone =
-    q.includes("phone") ||
-    q.includes("telephone") ||
-    q.includes("phone number") ||
-    q.includes("call");
-
-  const asksAddress =
-    q.includes("address") ||
-    q.includes("location") ||
-    q.includes("headquarters") ||
-    q.includes("hq") ||
-    q.includes("where is ndc");
-
-  const asksContact =
-    q.includes("contact") ||
-    q.includes("contacts") ||
-    q.includes("reach ndc") ||
-    q.includes("reach them") ||
-    q.includes("contact information") ||
-    q.includes("contact details") ||
-    q.includes("how can i contact") ||
-    q.includes("how do i contact") ||
-    q.includes("how can i reach");
-
-  if (
-    asksEmail &&
-    !asksPhone &&
-    !asksAddress &&
-    !asksContact
-  ) {
-
-    return {
-
-      answer:
-        "NDC's email address is info@ndc.go.tz.",
-
-      suggestions: [
-        "What is NDC's phone number?",
-        "What is NDC's address?",
-        "What is NDC?"
-      ]
-    };
-  }
-
-  if (
-    asksPhone &&
-    !asksEmail &&
-    !asksAddress &&
-    !asksContact
-  ) {
-
-    return {
-
-      answer:
-        "NDC's telephone numbers are +255 22 2112893 and +255 22 2113618.",
-
-      suggestions: [
-        "What is NDC's email?",
-        "What is NDC's address?",
-        "How can I contact NDC?"
-      ]
-    };
-  }
-
-  if (
-    asksAddress &&
-    !asksEmail &&
-    !asksPhone &&
-    !asksContact
-  ) {
-
-    return {
-
-      answer:
-        "NDC's headquarters are at Development House, Kivukoni Front / Ohio Street, P.O. Box 2669, Dar es Salaam, Tanzania.",
-
-      suggestions: [
-        "What is NDC's email?",
-        "What is NDC's phone number?",
-        "What does NDC do?"
-      ]
-    };
-  }
-
-  if (
-    asksContact ||
-    (asksEmail && asksPhone) ||
-    (asksEmail && asksAddress) ||
-    (asksPhone && asksAddress)
-  ) {
-
-    return {
-
-      answer:
-        "You can contact the National Development Corporation (NDC) using:\n\n" +
-        "Email: info@ndc.go.tz\n" +
-        "Telephone: +255 22 2112893 / +255 22 2113618\n" +
-        "Address: Development House, Kivukoni Front / Ohio Street, P.O. Box 2669, Dar es Salaam, Tanzania.",
-
-      suggestions: [
-        "What is NDC's official website?",
-        "What does NDC do?",
-        "How can I become an NDC investor?",
-        "What projects does NDC have?"
-      ]
-    };
-  }
-
-  return null;
-}
-
-// --------------------------------------------------
-// CONVERSATIONAL RESPONSES
-// --------------------------------------------------
-
-function getConversationAnswer(question) {
-
-  const q =
-    normalize(question);
-
-  // ----------------------------------------------
-  // GREETINGS
-  // ----------------------------------------------
-
-  if (
-    q === "hi" ||
-    q === "hello" ||
-    q === "hey" ||
-    q === "good morning" ||
-    q === "good afternoon" ||
-    q === "good evening"
-  ) {
-
-    return {
-
-      answer:
-        "Hello! I'm the NDC Assistant. I can help you learn about the National Development Corporation, its projects, investment opportunities, industrial areas, contacts, and more.",
-
-      suggestions: [
-        "What is NDC?",
-        "What does NDC do?",
-        "What projects does NDC have?",
-        "How can I become an NDC investor?"
-      ]
-    };
-  }
-
-  // ----------------------------------------------
-  // IDENTITY / ORIGIN
-  // ----------------------------------------------
-
-  const identityQuestion =
-    q === "who are you" ||
-    q === "what are you" ||
-    q === "who is this" ||
-    q === "what is your name" ||
-    q === "tell me about yourself" ||
-    q.includes("where are you from") ||
-    q.includes("where do you come from") ||
-    q.includes("which country are you from") ||
-    q.includes("what country are you from") ||
-    q.includes("are you from china") ||
-    q.includes("are you from alibaba") ||
-    q.includes("are you from alibaba cloud");
-
-  if (identityQuestion) {
-
-    return {
-
-      answer:
-        "I am the NDC Assistant, an AI assistant that provides information about the National Development Corporation (NDC) of Tanzania.",
-
-      suggestions: [
-        "What is NDC?",
-        "What does NDC do?",
-        "What projects does NDC have?",
-        "How can I contact NDC?"
-      ]
-    };
-  }
-
-  // ----------------------------------------------
-  // GOODBYE
-  // ----------------------------------------------
-
-  if (
-    q === "bye" ||
-    q === "goodbye" ||
-    q === "see you"
-  ) {
-
-    return {
-
-      answer:
-        "Goodbye! Feel free to come back if you have questions about NDC.",
-
-      suggestions: [
-        "What is NDC?",
-        "What projects does NDC have?",
-        "How can I contact NDC?"
-      ]
-    };
-  }
-
-  // ----------------------------------------------
-  // THANKS
-  // ----------------------------------------------
-
-  if (
-    q === "thanks" ||
-    q === "thank you" ||
-    q === "thank"
-  ) {
-
-    return {
-
-      answer:
-        "You're welcome! I'm happy to help.",
-
-      suggestions: [
-        "What projects does NDC have?",
-        "How can I become an NDC investor?",
-        "How can I contact NDC?"
-      ]
-    };
-  }
-
-  // ----------------------------------------------
-  // CAPABILITIES
-  // ----------------------------------------------
-
-  if (
-    q.includes("what can i ask") ||
-    q.includes("what else can i ask") ||
-    q.includes("what can you help") ||
-    q.includes("what do you know")
-  ) {
-
-    return {
-
-      answer:
-        "You can ask me about NDC's projects, industrial sectors, investment partnerships, industrial parks, history, government role, jobs, tenders, or contact information.",
-
-      suggestions: [
-        "What is NDC?",
-        "Tell me about the Liganga project",
-        "How can I become an NDC investor?",
-        "What industrial parks does NDC have?"
-      ]
-    };
-  }
-
-  return null;
-}
-
-// --------------------------------------------------
+// ============================================================
 // GET RELEVANT SECTIONS
-// --------------------------------------------------
+// ============================================================
 
 function getSections(question) {
+    const q = normalize(question);
 
-  const q =
-    normalize(question);
+    const result = [];
 
-  const sections = [];
-
-  // ----------------------------------------------
-  // IDENTITY
-  // ----------------------------------------------
-
-  const identityWords = [
-
-    "what is ndc",
-    "what does ndc stand for",
-    "who is ndc",
-    "ndc meaning",
-    "ndc mean",
-    "what is national development corporation",
-    "national development corporation",
-    "is ndc a government",
-    "government organization",
-    "government institution",
-    "who owns ndc",
-    "owner",
-    "which country",
-    "what country",
-    "country",
-    "where does ndc operate"
-  ];
-
-  if (
-    identityWords.some(
-      word => q.includes(word)
-    )
-  ) {
-
-    addSection(
-      sections,
-      "1. BASIC INFORMATION"
-    );
-
-    addSection(
-      sections,
-      "2. WHAT IS NDC?"
-    );
-  }
-
-  // ----------------------------------------------
-  // PURPOSE
-  // ----------------------------------------------
-
-  const purposeWords = [
-
-    "purpose",
-    "role",
-    "function",
-    "functions",
-    "mission",
-    "vision",
-    "objective",
-    "objectives",
-    "what does ndc do",
-    "what is ndc responsible for",
-    "responsibility",
-    "responsibilities",
-    "mandate",
-    "main work",
-    "work",
-    "aim",
-    "aims"
-  ];
-
-  if (
-    purposeWords.some(
-      word => q.includes(word)
-    )
-  ) {
-
-    addSection(
-      sections,
-      "3. NDC VISION"
-    );
-
-    addSection(
-      sections,
-      "4. NDC MISSION"
-    );
-
-    addSection(
-      sections,
-      "5. MAIN PURPOSE OF NDC"
-    );
-
-    addSection(
-      sections,
-      "6. CORE FUNCTIONS OF NDC"
-    );
-  }
-
-  // ----------------------------------------------
-  // CONTACT
-  // ----------------------------------------------
-
-  const contactWords = [
-
-    "contact",
-    "contacts",
-    "email",
-    "e mail",
-    "phone",
-    "telephone",
-    "call",
-    "address",
-    "headquarters",
-    "hq",
-    "website",
-    "reach",
-    "location"
-  ];
-
-  if (
-    contactWords.some(
-      word => q.includes(word)
-    )
-  ) {
-
-    addSection(
-      sections,
-      "1. BASIC INFORMATION"
-    );
-
-    addSection(
-      sections,
-      "25. CONTACT INFORMATION"
-    );
-  }
-
-  // ----------------------------------------------
-  // INDUSTRIES
-  // ----------------------------------------------
-
-  const industryWords = [
-
-    "industry",
-    "industries",
-    "industrial",
-    "manufacturing",
-    "sector",
-    "sectors",
-    "iron",
-    "steel",
-    "coal",
-    "chemical",
-    "chemicals",
-    "biological",
-    "biotechnology",
-    "agro",
-    "agriculture",
-    "machinery",
-    "machine",
-    "tyre",
-    "tires",
-    "tire",
-    "pharmaceutical",
-    "medical",
-    "textile",
-    "automotive"
-  ];
-
-  if (
-    industryWords.some(
-      word => q.includes(word)
-    )
-  ) {
-
-    addSection(
-      sections,
-      "6. CORE FUNCTIONS OF NDC"
-    );
-
-    addSection(
-      sections,
-      "7. NDC'S STRATEGIC INDUSTRIAL AREAS"
-    );
-
-    addSection(
-      sections,
-      "22. NDC'S CURRENT STRATEGIC PROJECT CATEGORIES"
-    );
-  }
-
-  // ----------------------------------------------
-  // PROJECTS
-  // ----------------------------------------------
-
-  if (
-    q.includes("project") ||
-    q.includes("projects")
-  ) {
-
-    addSection(
-      sections,
-      "8. MAJOR NDC PROJECTS"
-    );
-
-    addSection(
-      sections,
-      "28. IMPORTANT PROJECT LIST"
-    );
-  }
-
-  // ----------------------------------------------
-  // LIGANGA
-  // ----------------------------------------------
-
-  if (
-    q.includes("liganga") ||
-    q.includes("iron ore") ||
-    q.includes("iron extraction") ||
-    q.includes("iron and steel")
-  ) {
-
-    addSection(
-      sections,
-      "8.1 LIGANGA IRON AND STEEL PROJECT"
-    );
-  }
-
-  // ----------------------------------------------
-  // MCHUCHUMA
-  // ----------------------------------------------
-
-  if (
-    q.includes("mchuchuma") ||
-    q.includes("coal mining") ||
-    q.includes("coal mine") ||
-    q.includes("coal to electricity") ||
-    q.includes("coal-to-electricity")
-  ) {
-
-    addSection(
-      sections,
-      "8.2 MCHUCHUMA COAL PROJECT"
-    );
-
-    addSection(
-      sections,
-      "8.3 MCHUCHUMA COAL-TO-ELECTRICITY"
-    );
-  }
-
-  // ----------------------------------------------
-  // ENGARUKA
-  // ----------------------------------------------
-
-  if (
-    q.includes("engaruka") ||
-    q.includes("soda ash")
-  ) {
-
-    addSection(
-      sections,
-      "8.4 ENGARUKA SODA ASH PROJECT"
-    );
-  }
-
-  // ----------------------------------------------
-  // TYRE
-  // ----------------------------------------------
-
-  if (
-    q.includes("tyre") ||
-    q.includes("tires") ||
-    q.includes("tire")
-  ) {
-
-    addSection(
-      sections,
-      "8.5 ARUSHA TYRE MANUFACTURING PROJECT"
-    );
-  }
-
-  // ----------------------------------------------
-  // MACHINE TOOLS
-  // ----------------------------------------------
-
-  if (
-    q.includes("machine tools") ||
-    q.includes("kmtc") ||
-    q.includes("kilimanjaro machine") ||
-    q.includes("mang ula") ||
-    q.includes("mang'ula")
-  ) {
-
-    addSection(
-      sections,
-      "8.6 MANG'ULA MACHINE TOOLS PROJECT"
-    );
-
-    addSection(
-      sections,
-      "8.7 KILIMANJARO MACHINE TOOLS / KMTC"
-    );
-  }
-
-  // ----------------------------------------------
-  // TBPL
-  // ----------------------------------------------
-
-  if (
-    q.includes("tbpl") ||
-    q.includes("biotech") ||
-    q.includes("biotechnology") ||
-    q.includes("biolarvicide")
-  ) {
-
-    addSection(
-      sections,
-      "8.8 TANZANIA BIOTECH PRODUCTS LIMITED (TBPL)"
-    );
-  }
-
-  // ----------------------------------------------
-  // TAMCO
-  // ----------------------------------------------
-
-  if (
-    q.includes("tamco") ||
-    q.includes("kibaha industrial") ||
-    q.includes("industrial estate")
-  ) {
-
-    addSection(
-      sections,
-      "8.9 TAMCO INDUSTRIAL ESTATE"
-    );
-  }
-
-  // ----------------------------------------------
-  // INDUSTRIAL PARKS
-  // ----------------------------------------------
-
-  if (
-    q.includes("industrial park") ||
-    q.includes("industrial parks") ||
-    q.includes("industrial area") ||
-    q.includes("industrial areas") ||
-    q.includes("industrial estate") ||
-    q.includes("industrial estates") ||
-    q.includes("industrial land") ||
-    q.includes("industrial plot") ||
-    q.includes("industrial plots")
-  ) {
-
-    addSection(
-      sections,
-      "9. INDUSTRIAL PARKS / INDUSTRIAL ESTATES"
-    );
-  }
-
-  // ----------------------------------------------
-  // KANGE
-  // ----------------------------------------------
-
-  if (q.includes("kange")) {
-
-    addSection(
-      sections,
-      "8.10 KANGE INDUSTRIAL AREA"
-    );
-  }
-
-  // ----------------------------------------------
-  // NYANZA
-  // ----------------------------------------------
-
-  if (q.includes("nyanza")) {
-
-    addSection(
-      sections,
-      "8.11 NYANZA INDUSTRIAL AREA"
-    );
-  }
-
-  // ----------------------------------------------
-  // ETC CARGO
-  // ----------------------------------------------
-
-  if (
-    q.includes("etc cargo") ||
-    q.includes("dry port") ||
-    q.includes("grain")
-  ) {
-
-    addSection(
-      sections,
-      "8.13 ETC CARGO / GRAIN DRY PORT"
-    );
-  }
-
-  // ----------------------------------------------
-  // RUBBER
-  // ----------------------------------------------
-
-  if (
-    q.includes("rubber") ||
-    q.includes("kalunga") ||
-    q.includes("kihuhwi")
-  ) {
-
-    addSection(
-      sections,
-      "8.14 KALUNGA RUBBER PLANTATIONS"
-    );
-
-    addSection(
-      sections,
-      "8.15 KIHUHWI RUBBER PROJECT"
-    );
-  }
-
-  // ----------------------------------------------
-  // INVESTMENT
-  // ----------------------------------------------
-
-  if (
-    q.includes("invest") ||
-    q.includes("investor") ||
-    q.includes("investment") ||
-    q.includes("partner") ||
-    q.includes("partnership") ||
-    q.includes("joint venture") ||
-    q.includes("foreign investor") ||
-    q.includes("foreigner") ||
-    q.includes("become an investor")
-  ) {
-
-    addSection(
-      sections,
-      "10. HOW NDC WORKS WITH INVESTORS"
-    );
-
-    addSection(
-      sections,
-      "11. WHAT SHOULD AN INVESTOR PREPARE?"
-    );
-
-    addSection(
-      sections,
-      "12. TYPES OF INVESTMENT OPPORTUNITIES"
-    );
-  }
-
-  // ----------------------------------------------
-  // TENDERS
-  // ----------------------------------------------
-
-  if (
-    q.includes("tender") ||
-    q.includes("procurement") ||
-    q.includes("proposal") ||
-    q.includes("expression of interest") ||
-    q.includes("rfp")
-  ) {
-
-    addSection(
-      sections,
-      "13. TENDERS AND PROCUREMENT"
-    );
-  }
-
-  // ----------------------------------------------
-  // JOBS
-  // ----------------------------------------------
-
-  if (
-    q.includes("job") ||
-    q.includes("jobs") ||
-    q.includes("vacancy") ||
-    q.includes("vacancies") ||
-    q.includes("career") ||
-    q.includes("careers") ||
-    q.includes("employment")
-  ) {
-
-    addSection(
-      sections,
-      "14. JOBS / EMPLOYMENT AT NDC"
-    );
-  }
-
-  // ----------------------------------------------
-  // ORGANIZATION
-  // ----------------------------------------------
-
-  if (
-    q.includes("board") ||
-    q.includes("managing director") ||
-    q.includes("director") ||
-    q.includes("organizational structure") ||
-    q.includes("organization structure")
-  ) {
-
-    addSection(
-      sections,
-      "15. NDC ORGANIZATIONAL STRUCTURE"
-    );
-  }
-
-  // ----------------------------------------------
-  // GOVERNMENT
-  // ----------------------------------------------
-
-  if (
-    q.includes("government") ||
-    q.includes("ministry") ||
-    q.includes("supervise") ||
-    q.includes("supervises")
-  ) {
-
-    addSection(
-      sections,
-      "16. NDC AND THE TANZANIAN GOVERNMENT"
-    );
-
-    addSection(
-      sections,
-      "1. BASIC INFORMATION"
-    );
-  }
-
-  // ----------------------------------------------
-  // PRIVATE SECTOR
-  // ----------------------------------------------
-
-  if (
-    q.includes("private sector") ||
-    q.includes("private company") ||
-    q.includes("private business") ||
-    q.includes("entrepreneur")
-  ) {
-
-    addSection(
-      sections,
-      "17. NDC AND PRIVATE INVESTORS"
-    );
-  }
-
-  // ----------------------------------------------
-  // ECONOMIC IMPACT
-  // ----------------------------------------------
-
-  if (
-    q.includes("economic impact") ||
-    q.includes("benefit") ||
-    q.includes("employment creation") ||
-    q.includes("industrialization")
-  ) {
-
-    addSection(
-      sections,
-      "18. NDC'S ECONOMIC IMPACT"
-    );
-  }
-
-  // ----------------------------------------------
-  // SIDO
-  // ----------------------------------------------
-
-  if (q.includes("sido")) {
-
-    addSection(
-      sections,
-      "20. IMPORTANT DISTINCTION: NDC IS NOT SIDO"
-    );
-  }
-
-  // ----------------------------------------------
-  // TIC
-  // ----------------------------------------------
-
-  if (
-    q.includes("tic") ||
-    q.includes("tanzania investment centre") ||
-    q.includes("tanzania investment center")
-  ) {
-
-    addSection(
-      sections,
-      "21. IMPORTANT DISTINCTION: NDC IS NOT TANZANIA INVESTMENT CENTRE"
-    );
-  }
-
-  // ----------------------------------------------
-  // HISTORY
-  // ----------------------------------------------
-
-  if (
-    q.includes("history") ||
-    q.includes("historical") ||
-    q.includes("established") ||
-    q.includes("1962") ||
-    q.includes("1965")
-  ) {
-
-    addSection(
-      sections,
-      "2. WHAT IS NDC?"
-    );
-
-    addSection(
-      sections,
-      "19. HISTORICAL IMPORTANCE"
-    );
-  }
-
-  // ----------------------------------------------
-  // ABOUT NDC
-  // ----------------------------------------------
-
-  if (
-    q === "ndc" ||
-    q === "about ndc" ||
-    q.includes("tell me about ndc") ||
-    q.includes("information about ndc")
-  ) {
-
-    addSection(
-      sections,
-      "1. BASIC INFORMATION"
-    );
-
-    addSection(
-      sections,
-      "2. WHAT IS NDC?"
-    );
-
-    addSection(
-      sections,
-      "3. NDC VISION"
-    );
-
-    addSection(
-      sections,
-      "4. NDC MISSION"
-    );
-
-    addSection(
-      sections,
-      "5. MAIN PURPOSE OF NDC"
-    );
-
-    addSection(
-      sections,
-      "7. NDC'S STRATEGIC INDUSTRIAL AREAS"
-    );
-  }
-
-  if (sections.length === 0) {
-    return null;
-  }
-
-  return sections.join(
-    "\n\n==============================\n\n"
-  );
-}
-
-// --------------------------------------------------
-// DETERMINE IF CURRENT WEBSITE VERIFICATION IS NEEDED
-// --------------------------------------------------
-
-function requiresWebsiteVerification(question) {
-
-  const q =
-    normalize(question);
-
-  const currentWords = [
-
-    "current",
-    "currently",
-    "latest",
-    "recent",
-    "today",
-    "now",
-    "present",
-    "up to date",
-    "updated",
-    "as of"
-  ];
-
-  const currentLeadershipWords = [
-
-    "current managing director",
-    "who is the managing director",
-    "who is ndc managing director",
-    "current director",
-    "current leadership",
-    "current ceo",
-    "who leads ndc",
-    "head of ndc"
-  ];
-
-  const tenderWords = [
-
-    "current tender",
-    "latest tender",
-    "open tender",
-    "active tender",
-    "tenders",
-    "procurement notice",
-    "expression of interest",
-    "rfp",
-    "deadline"
-  ];
-
-  const vacancyWords = [
-
-    "current vacancy",
-    "latest vacancy",
-    "open vacancy",
-    "job opening",
-    "current jobs",
-    "latest jobs",
-    "available jobs",
-    "vacancies",
-    "careers"
-  ];
-
-  const investmentWords = [
-
-    "current investment opportunity",
-    "latest investment opportunity",
-    "available investment",
-    "investment opportunity",
-    "invest now",
-    "current opportunities"
-  ];
-
-  const projectStatusWords = [
-
-    "current project status",
-    "latest project status",
-    "project status",
-    "is the project operational",
-    "is the project active",
-    "is the project completed",
-    "has the project started",
-    "has construction started",
-    "is it operational"
-  ];
-
-  return (
-    currentWords.some(
-      word => q.includes(word)
-    ) ||
-
-    currentLeadershipWords.some(
-      word => q.includes(word)
-    ) ||
-
-    tenderWords.some(
-      word => q.includes(word)
-    ) ||
-
-    vacancyWords.some(
-      word => q.includes(word)
-    ) ||
-
-    investmentWords.some(
-      word => q.includes(word)
-    ) ||
-
-    projectStatusWords.some(
-      word => q.includes(word)
-    )
-  );
-}
-
-// --------------------------------------------------
-// WEBSITE PAGE SELECTION
-// --------------------------------------------------
-
-function getWebsitePaths(question) {
-
-  const q =
-    normalize(question);
-
-  const paths = [];
-
-  // Always start with the homepage.
-  paths.push("/");
-
-  // ----------------------------------------------
-  // ORGANIZATION / LEADERSHIP
-  // ----------------------------------------------
-
-  if (
-    q.includes("managing director") ||
-    q.includes("director") ||
-    q.includes("leadership") ||
-    q.includes("organizational structure") ||
-    q.includes("organization structure") ||
-    q.includes("board")
-  ) {
-
-    paths.push(
-      "/organization-structure/"
-    );
-  }
-
-  // ----------------------------------------------
-  // TENDERS / PROCUREMENT
-  // ----------------------------------------------
-
-  if (
-    q.includes("tender") ||
-    q.includes("procurement") ||
-    q.includes("rfp") ||
-    q.includes("expression of interest") ||
-    q.includes("deadline")
-  ) {
-
-    paths.push(
-      "/tenders/",
-      "/procurement/"
-    );
-  }
-
-  // ----------------------------------------------
-  // JOBS / VACANCIES
-  // ----------------------------------------------
-
-  if (
-    q.includes("job") ||
-    q.includes("jobs") ||
-    q.includes("vacancy") ||
-    q.includes("vacancies") ||
-    q.includes("career") ||
-    q.includes("careers") ||
-    q.includes("employment")
-  ) {
-
-    paths.push(
-      "/vacancies/",
-      "/jobs/",
-      "/careers/"
-    );
-  }
-
-  // ----------------------------------------------
-  // INVESTMENT
-  // ----------------------------------------------
-
-  if (
-    q.includes("investment") ||
-    q.includes("investor") ||
-    q.includes("invest") ||
-    q.includes("partnership")
-  ) {
-
-    paths.push(
-      "/investment-opportunities/",
-      "/investment/"
-    );
-  }
-
-  // ----------------------------------------------
-  // PROJECTS
-  // ----------------------------------------------
-
-  if (
-    q.includes("project") ||
-    q.includes("liganga") ||
-    q.includes("mchuchuma") ||
-    q.includes("engaruka") ||
-    q.includes("tamco") ||
-    q.includes("kmtc") ||
-    q.includes("tbpl")
-  ) {
-
-    paths.push(
-      "/projects/"
-    );
-  }
-
-  return [
-    ...new Set(paths)
-  ];
-}
-
-// --------------------------------------------------
-// HTML TO TEXT
-// --------------------------------------------------
-
-function htmlToText(html) {
-
-  if (!html) {
-    return "";
-  }
-
-  return html
-
-    // Remove scripts and styles.
-    .replace(
-      /<script[\s\S]*?<\/script>/gi,
-      " "
-    )
-
-    .replace(
-      /<style[\s\S]*?<\/style>/gi,
-      " "
-    )
-
-    // Remove comments.
-    .replace(
-      /<!--[\s\S]*?-->/g,
-      " "
-    )
-
-    // Convert common block elements to line breaks.
-    .replace(
-      /<\/(p|div|section|article|li|h1|h2|h3|h4|h5|h6|tr|br)>/gi,
-      "\n"
-    )
-
-    // Remove remaining HTML tags.
-    .replace(
-      /<[^>]+>/g,
-      " "
-    )
-
-    // Decode common HTML entities.
-    .replace(
-      /&nbsp;/gi,
-      " "
-    )
-
-    .replace(
-      /&amp;/gi,
-      "&"
-    )
-
-    .replace(
-      /&quot;/gi,
-      '"'
-    )
-
-    .replace(
-      /&#39;/gi,
-      "'"
-    )
-
-    .replace(
-      /&apos;/gi,
-      "'"
-    )
-
-    .replace(
-      /&lt;/gi,
-      "<"
-    )
-
-    .replace(
-      /&gt;/gi,
-      ">"
-    )
-
-    .replace(
-      /\s+/g,
-      " "
-    )
-
-    .trim();
-}
-
-// --------------------------------------------------
-// FETCH OFFICIAL NDC WEBSITE PAGE
-// --------------------------------------------------
-
-async function fetchNDCPage(
-  pagePath
-) {
-
-  const url =
-    new URL(
-      pagePath,
-      NDC_WEBSITE
-    );
-
-  // Security restriction:
-  // Only allow requests to ndc.go.tz.
-  if (
-    url.hostname !== "ndc.go.tz" &&
-    url.hostname !== "www.ndc.go.tz"
-  ) {
-
-    throw new Error(
-      "Blocked non-NDC website URL"
-    );
-  }
-
-  console.log(
-    "Checking official NDC website:",
-    url.href
-  );
-
-  const response =
-    await fetch(
-      url.href,
-      {
-        method: "GET",
-
-        headers: {
-          "User-Agent":
-            "NDC-Assistant/1.0"
-        },
-
-        signal:
-          AbortSignal.timeout(
-            WEBSITE_TIMEOUT
-          )
-      }
-    );
-
-  if (!response.ok) {
-
-    throw new Error(
-      `NDC website returned ${response.status}`
-    );
-  }
-
-  const html =
-    await response.text();
-
-  const text =
-    htmlToText(html);
-
-  return {
-
-    url:
-      url.href,
-
-    text
-  };
-}
-
-// --------------------------------------------------
-// EXTRACT USEFUL WEBSITE CONTENT
-// --------------------------------------------------
-
-function findRelevantWebsiteText(
-  websitePages,
-  question
-) {
-
-  const q =
-    normalize(question);
-
-  const keywords =
-    q
-      .split(" ")
-      .filter(
-        word => word.length >= 4
-      );
-
-  const results = [];
-
-  for (
-    const page of websitePages
-  ) {
-
-    if (!page.text) {
-      continue;
-    }
-
-    const sentences =
-      page.text
-        .split(/(?<=[.!?])\s+/)
-        .filter(
-          sentence =>
-            sentence.length >= 20
-        );
-
-    const matchingSentences =
-      sentences.filter(
-        sentence => {
-
-          const normalizedSentence =
-            normalize(sentence);
-
-          return keywords.some(
-            keyword =>
-              normalizedSentence.includes(
-                keyword
-              )
-          );
-        }
-      );
+    // --------------------------------------------------------
+    // BASIC INFORMATION
+    // --------------------------------------------------------
 
     if (
-      matchingSentences.length > 0
+        q.includes("what is ndc") ||
+        q.includes("what does ndc stand for") ||
+        q.includes("meaning of ndc") ||
+        q.includes("ndc stand for") ||
+        q.includes("about ndc")
     ) {
-
-      results.push({
-
-        url:
-          page.url,
-
-        text:
-          matchingSentences
-            .slice(0, 80)
-            .join(" ")
-      });
-
-    } else {
-
-      // If no individual sentences match,
-      // keep a limited amount of page content.
-      results.push({
-
-        url:
-          page.url,
-
-        text:
-          page.text.substring(
-            0,
-            12000
-          )
-      });
+        addSection(result, "1. BASIC INFORMATION");
+        addSection(result, "2. WHAT IS NDC?");
     }
-  }
 
-  return results;
+    // --------------------------------------------------------
+    // VISION
+    // --------------------------------------------------------
+
+    if (
+        q.includes("vision") ||
+        q.includes("ndc vision")
+    ) {
+        addSection(result, "3. VISION");
+    }
+
+    // --------------------------------------------------------
+    // MISSION
+    // --------------------------------------------------------
+
+    if (
+        q.includes("mission") ||
+        q.includes("ndc mission")
+    ) {
+        addSection(result, "4. MISSION");
+    }
+
+    // --------------------------------------------------------
+    // PURPOSE
+    // --------------------------------------------------------
+
+    if (
+        q.includes("purpose") ||
+        q.includes("main purpose")
+    ) {
+        addSection(result, "5. MAIN PURPOSE");
+    }
+
+    // --------------------------------------------------------
+    // FUNCTIONS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("function") ||
+        q.includes("functions") ||
+        q.includes("what does ndc do") ||
+        q.includes("role of ndc") ||
+        q.includes("responsibilities")
+    ) {
+        addSection(result, "6. CORE FUNCTIONS");
+    }
+
+    // --------------------------------------------------------
+    // INDUSTRIAL AREAS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("industrial area") ||
+        q.includes("industrial sector") ||
+        q.includes("strategic industrial") ||
+        q.includes("industries")
+    ) {
+        addSection(result, "7. STRATEGIC INDUSTRIAL AREAS");
+    }
+
+    // --------------------------------------------------------
+    // PROJECTS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("project") ||
+        q.includes("projects") ||
+        q.includes("liganga") ||
+        q.includes("mchuchuma") ||
+        q.includes("engaruka") ||
+        q.includes("maganga") ||
+        q.includes("matitu") ||
+        q.includes("katewaka") ||
+        q.includes("kilimanjaro machine") ||
+        q.includes("kmtc") ||
+        q.includes("tanzania biotech") ||
+        q.includes("tbpl")
+    ) {
+        addSection(result, "8. MAJOR PROJECTS");
+        addSection(result, "22. CURRENT STRATEGIC PROJECT CATEGORIES");
+        addSection(result, "28. IMPORTANT PROJECT LIST");
+    }
+
+    // --------------------------------------------------------
+    // INDUSTRIAL PARKS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("industrial park") ||
+        q.includes("industrial parks") ||
+        q.includes("industrial estate") ||
+        q.includes("industrial estates")
+    ) {
+        addSection(result, "9. INDUSTRIAL PARKS/ESTATES");
+        addSection(result, "22. CURRENT STRATEGIC PROJECT CATEGORIES");
+    }
+
+    // --------------------------------------------------------
+    // INVESTORS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("investor") ||
+        q.includes("investors") ||
+        q.includes("investment") ||
+        q.includes("invest") ||
+        q.includes("partnership") ||
+        q.includes("partner")
+    ) {
+        addSection(result, "10. HOW NDC WORKS WITH INVESTORS");
+        addSection(result, "11. INVESTOR PREPARATION");
+        addSection(result, "12. INVESTMENT OPPORTUNITIES");
+    }
+
+    // --------------------------------------------------------
+    // TENDERS / PROCUREMENT
+    // --------------------------------------------------------
+
+    if (
+        q.includes("tender") ||
+        q.includes("tenders") ||
+        q.includes("procurement") ||
+        q.includes("rfp") ||
+        q.includes("expression of interest")
+    ) {
+        addSection(result, "13. TENDERS AND PROCUREMENT");
+    }
+
+    // --------------------------------------------------------
+    // JOBS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("job") ||
+        q.includes("jobs") ||
+        q.includes("vacancy") ||
+        q.includes("vacancies") ||
+        q.includes("career") ||
+        q.includes("careers") ||
+        q.includes("employment") ||
+        q.includes("work at ndc")
+    ) {
+        addSection(result, "14. JOBS");
+    }
+
+    // --------------------------------------------------------
+    // ORGANIZATIONAL STRUCTURE / LEADERSHIP
+    // --------------------------------------------------------
+
+    if (
+        q.includes("board") ||
+        q.includes("managing director") ||
+        q.includes("current director") ||
+        q.includes("director") ||
+        q.includes("leadership") ||
+        q.includes("organizational structure") ||
+        q.includes("organization structure") ||
+        q.includes("who leads ndc") ||
+        q.includes("head of ndc")
+    ) {
+        addSection(result, "15. NDC ORGANIZATIONAL STRUCTURE");
+    }
+
+    // --------------------------------------------------------
+    // GOVERNMENT
+    // --------------------------------------------------------
+
+    if (
+        q.includes("government") ||
+        q.includes("government organization") ||
+        q.includes("government institution") ||
+        q.includes("ministry") ||
+        q.includes("supervise") ||
+        q.includes("supervises") ||
+        q.includes("parent ministry")
+    ) {
+        addSection(result, "16. NDC and Government");
+    }
+
+    // --------------------------------------------------------
+    // PRIVATE INVESTORS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("private investor") ||
+        q.includes("private investors") ||
+        q.includes("private sector")
+    ) {
+        addSection(result, "17. NDC and Private Investors");
+    }
+
+    // --------------------------------------------------------
+    // ECONOMIC IMPACT
+    // --------------------------------------------------------
+
+    if (
+        q.includes("economic impact") ||
+        q.includes("economy") ||
+        q.includes("economic") ||
+        q.includes("employment creation") ||
+        q.includes("jobs created")
+    ) {
+        addSection(result, "18. Economic Impact");
+    }
+
+    // --------------------------------------------------------
+    // HISTORY
+    // --------------------------------------------------------
+
+    if (
+        q.includes("history") ||
+        q.includes("historical") ||
+        q.includes("established") ||
+        q.includes("founded")
+    ) {
+        addSection(result, "19. Historical Importance");
+    }
+
+    // --------------------------------------------------------
+    // COMPARISONS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("sido") ||
+        q.includes("compare ndc and sido") ||
+        q.includes("ndc vs sido")
+    ) {
+        addSection(result, "20. NDC vs SIDO");
+    }
+
+    if (
+        q.includes("tic") ||
+        q.includes("compare ndc and tic") ||
+        q.includes("ndc vs tic")
+    ) {
+        addSection(result, "21. NDC vs TIC");
+    }
+
+    // --------------------------------------------------------
+    // STRATEGIC PROJECTS
+    // --------------------------------------------------------
+
+    if (
+        q.includes("strategic project") ||
+        q.includes("strategic projects") ||
+        q.includes("strategy") ||
+        q.includes("strategic plan")
+    ) {
+        addSection(result, "22. Current Strategic Project Categories");
+        addSection(result, "23. Questions chatbot should answer");
+        addSection(result, "24. Chatbot Answer Rules");
+    }
+
+    // --------------------------------------------------------
+    // CONTACT
+    // --------------------------------------------------------
+
+    if (
+        q.includes("contact") ||
+        q.includes("phone") ||
+        q.includes("telephone") ||
+        q.includes("email") ||
+        q.includes("address") ||
+        q.includes("location") ||
+        q.includes("headquarters") ||
+        q.includes("where is ndc")
+    ) {
+        addSection(result, "25. Contact info");
+    }
+
+    // --------------------------------------------------------
+    // DESCRIPTION
+    // --------------------------------------------------------
+
+    if (
+        q.includes("describe ndc") ||
+        q.includes("short description") ||
+        q.includes("brief description")
+    ) {
+        addSection(result, "26. Short description");
+    }
+
+    // --------------------------------------------------------
+    // ONE SENTENCE
+    // --------------------------------------------------------
+
+    if (
+        q.includes("one sentence") ||
+        q.includes("in one sentence")
+    ) {
+        addSection(result, "27. One sentence description");
+    }
+
+    // --------------------------------------------------------
+    // KEYWORDS
+    // --------------------------------------------------------
+
+    if (result.length === 0) {
+        addSection(result, "29. Keywords for RAG/vector search");
+    }
+
+    return result;
 }
 
-// --------------------------------------------------
-// OFFICIAL NDC WEBSITE FALLBACK
-// --------------------------------------------------
+// ============================================================
+// BUILD KNOWLEDGE CONTEXT
+// ============================================================
 
-async function getWebsiteKnowledge(
-  question
-) {
+function buildContext(selectedSections) {
+    if (!selectedSections || selectedSections.length === 0) {
+        return knowledge;
+    }
 
-  const paths =
-    getWebsitePaths(
-      question
-    );
+    let context = "";
 
-  const pages = [];
+    for (const section of selectedSections) {
+        context += `\n\n### ${section}\n`;
+        context += sections[section] || "";
+    }
 
-  for (
-    const pagePath of paths
-  ) {
+    return context.trim();
+}
 
-    try {
+// ============================================================
+// CONTACT QUESTIONS
+// ============================================================
 
-      const page =
-        await fetchNDCPage(
-          pagePath
+function getContactAnswer(question) {
+    const q = normalize(question);
+
+    if (
+        q.includes("phone") ||
+        q.includes("telephone") ||
+        q.includes("contact number") ||
+        q.includes("contact details")
+    ) {
+        const section = Object.keys(sections).find(
+            key => normalize(key) === normalize("25. Contact info")
         );
 
-      if (
-        page.text &&
-        page.text.length > 50
-      ) {
-
-        pages.push(page);
-      }
-
-    } catch (error) {
-
-      console.log(
-        "Could not read NDC page:",
-        pagePath,
-        "-",
-        error.message
-      );
+        if (section) {
+            return sections[section];
+        }
     }
-  }
 
-  if (
-    pages.length === 0
-  ) {
+    if (
+        q.includes("email") ||
+        q.includes("email address")
+    ) {
+        const section = Object.keys(sections).find(
+            key => normalize(key) === normalize("25. Contact info")
+        );
+
+        if (section) {
+            return sections[section];
+        }
+    }
+
+    if (
+        q.includes("address") ||
+        q.includes("headquarters") ||
+        q.includes("where is ndc") ||
+        q.includes("location")
+    ) {
+        const section = Object.keys(sections).find(
+            key => normalize(key) === normalize("25. Contact info")
+        );
+
+        if (section) {
+            return sections[section];
+        }
+    }
 
     return null;
-  }
+}
 
-  const relevant =
-    findRelevantWebsiteText(
-      pages,
-      question
-    );
+// ============================================================
+// CONVERSATIONAL QUESTIONS
+// ============================================================
 
-  if (
-    relevant.length === 0
-  ) {
+function getConversationalAnswer(question) {
+    const q = normalize(question);
+
+    // Greetings
+    if (
+        /^(hi|hello|hey|good morning|good afternoon|good evening)$/.test(q)
+    ) {
+        return "Hello! How can I help you with information about the National Development Corporation (NDC)?";
+    }
+
+    // Identity
+    if (
+        q.includes("who are you") ||
+        q.includes("what are you") ||
+        q.includes("your name")
+    ) {
+        return "I am the NDC information assistant. I can help answer questions using the available NDC information.";
+    }
+
+    // Capabilities
+    if (
+        q.includes("what can you do") ||
+        q.includes("how can you help") ||
+        q.includes("what do you know")
+    ) {
+        return "I can provide information about NDC, including its functions, projects, investment opportunities, industrial parks, tenders, jobs, organizational structure, government relationship, and contact information.";
+    }
+
+    // Thanks
+    if (
+        q === "thanks" ||
+        q === "thank you" ||
+        q === "thank you very much"
+    ) {
+        return "You're welcome!";
+    }
+
+    // Goodbye
+    if (
+        q === "bye" ||
+        q === "goodbye" ||
+        q === "see you"
+    ) {
+        return "Goodbye! Feel free to ask if you need more information about NDC.";
+    }
 
     return null;
-  }
-
-  let result =
-    "OFFICIAL NDC WEBSITE INFORMATION\n\n";
-
-  for (
-    const page of relevant
-  ) {
-
-    result +=
-      `SOURCE: ${page.url}\n`;
-
-    result +=
-      `${page.text}\n\n`;
-
-    result +=
-      "==============================\n\n";
-  }
-
-  // Keep website context at a reasonable size.
-  return result.substring(
-    0,
-    30000
-  );
 }
 
-// --------------------------------------------------
-// SUGGESTIONS
-// --------------------------------------------------
-
-function getSuggestions(
-  question,
-  answer,
-  relevantKnowledge
-) {
-
-  const q =
-    normalize(question);
-
-  if (
-    q.includes("contact") ||
-    q.includes("email") ||
-    q.includes("phone") ||
-    q.includes("address")
-  ) {
-
-    return [
-      "What is NDC?",
-      "What does NDC do?",
-      "What projects does NDC have?",
-      "How can I become an NDC investor?"
-    ];
-  }
-
-  if (
-    q.includes("managing director") ||
-    q.includes("director")
-  ) {
-
-    return [
-      "What is NDC's organizational structure?",
-      "Which ministry supervises NDC?",
-      "What does NDC do?",
-      "How can I contact NDC?"
-    ];
-  }
-
-  if (q.includes("liganga")) {
-
-    return [
-      "What is the Mchuchuma project?",
-      "What is the purpose of the Liganga project?",
-      "What resources are involved in Liganga?",
-      "How can investors participate in NDC projects?"
-    ];
-  }
-
-  if (
-    q.includes("mchuchuma") ||
-    q.includes("coal")
-  ) {
-
-    return [
-      "Tell me about the Liganga project",
-      "What is Mchuchuma coal-to-electricity?",
-      "What are NDC's strategic industries?",
-      "How can investors work with NDC?"
-    ];
-  }
-
-  if (
-    q.includes("invest") ||
-    q.includes("partner") ||
-    q.includes("joint venture")
-  ) {
-
-    return [
-      "What documents should an investor prepare?",
-      "How does NDC work with investors?",
-      "What investment opportunities does NDC offer?",
-      "Can foreigners invest through NDC?"
-    ];
-  }
-
-  if (q.includes("project")) {
-
-    return [
-      "Tell me about the Liganga project",
-      "What is the Mchuchuma project?",
-      "What is the Engaruka Soda Ash Project?",
-      "What industrial parks does NDC have?"
-    ];
-  }
-
-  if (
-    q.includes("industry") ||
-    q.includes("industrial") ||
-    q.includes("manufacturing")
-  ) {
-
-    return [
-      "What industries does NDC focus on?",
-      "What industrial parks does NDC have?",
-      "What is TAMCO Industrial Estate?",
-      "Does NDC support private investors?"
-    ];
-  }
-
-  if (
-    q.includes("job") ||
-    q.includes("vacancy") ||
-    q.includes("career")
-  ) {
-
-    return [
-      "Where can I find NDC vacancies?",
-      "What areas does NDC employ professionals in?",
-      "What does NDC do?",
-      "How can I contact NDC?"
-    ];
-  }
-
-  return [
-    "What is NDC?",
-    "What does NDC do?",
-    "What projects does NDC have?",
-    "How can I become an NDC investor?"
-  ];
-}
-
-// --------------------------------------------------
-// NDC SYSTEM PROMPT
-// --------------------------------------------------
-
-const NDC_SYSTEM_PROMPT = `
-You are the NDC Assistant, an AI assistant for the
-National Development Corporation (NDC) of Tanzania.
-
-IDENTITY:
-
-Your name is NDC Assistant.
-
-NDC means National Development Corporation of Tanzania.
-
-You are the assistant presented through the NDC Assistant application.
-
-NEVER introduce yourself as:
-- Qwen
-- Alibaba Cloud
-- Ollama
-- an Alibaba Cloud AI
-- a different organization
-- a different NDC
-
-If the user asks "Who are you?", respond:
-
-"I am the NDC Assistant, an AI assistant that provides information
-about the National Development Corporation (NDC) of Tanzania."
-
-SOURCE PRIORITY:
-
-There are two possible sources of NDC information:
-
-1. The provided NDC knowledge file.
-2. The official NDC website at https://ndc.go.tz/
-
-The provided NDC knowledge file is the primary source for
-general and historical NDC information.
-
-For information that can change over time, official website
-information takes priority when it is available.
-
-This includes:
-- current leadership
-- current Managing Director
-- current Board information
-- current tenders
-- current vacancies
-- current investment opportunities
-- current project status
-- current announcements
-- current contact information
-
-If official NDC website information is provided in the context,
-use it to answer current questions.
-
-When using website information, identify it naturally as
-information from the official NDC website when appropriate.
-
-Never invent NDC facts.
-
-Never invent:
-- projects
-- investment opportunities
-- tenders
-- tender numbers
-- deadlines
-- prices
-- vacancies
-- job openings
-- contact information
-- project status
-- government decisions
-- investor requirements
-- names of current officials
-
-If information is not available in either provided source,
-say:
-
-"I could not verify that information from the available NDC information."
-
-Do not claim that an NDC project is operational unless the provided
-information explicitly confirms this.
-
-When the knowledge distinguishes between proposed, developing,
-under-construction, or operational projects, preserve that distinction.
-
-Do not confuse NDC Tanzania with another organization using
-the same abbreviation.
-
-Do not mention:
-- prompts
-- system instructions
-- RAG
-- retrieval
-- vector search
-- knowledge-base processing
-- internal instructions
-- model limitations
-
-Do not repeat the user's question.
-
-Be concise for simple questions.
-
-Provide more detail when the user asks for detail.
-
-If the user asks for a list, provide the actual list.
-
-Use professional and natural language.
-
-NDC CORE INFORMATION:
-
-Official Name:
-National Development Corporation
-
-Country:
-United Republic of Tanzania
-
-Responsible Ministry:
-Ministry of Industry and Trade, Tanzania
-
-Headquarters:
-Development House, Kivukoni Front / Ohio Street,
-P.O. Box 2669, Dar es Salaam, Tanzania
-
-Email:
-info@ndc.go.tz
-
-Telephone:
-+255 22 2112893 / +255 22 2113618
-
-Website:
-https://ndc.go.tz/
-`;
-
-// --------------------------------------------------
-// OLLAMA
-// --------------------------------------------------
-
-async function askOllama(
-  question,
-  relevantKnowledge
-) {
-
-  const prompt = `
-${NDC_SYSTEM_PROMPT}
-
-USER QUESTION:
-${question}
-
-PROVIDED NDC INFORMATION:
-${relevantKnowledge}
-
-ANSWER:
-`;
-
-  const response =
-    await fetch(
-      OLLAMA_URL,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json"
-        },
-
-        body: JSON.stringify({
-
-          model: MODEL,
-
-          prompt,
-
-          stream: false,
-
-          options: {
-
-            temperature: 0.1,
-
-            top_p: 0.9,
-
-            num_predict: 300
-          }
-        }),
-
-        signal:
-          AbortSignal.timeout(180000)
-      }
-    );
-
-  if (!response.ok) {
-
-    const errorText =
-      await response.text();
-
-    throw new Error(
-      `Ollama returned ${response.status}: ${errorText}`
-    );
-  }
-
-  const data =
-    await response.json();
-
-  let answer =
-    data.response
-      ? data.response.trim()
-      : "";
-
-  // ----------------------------------------------
-  // SAFETY CLEANUP
-  // ----------------------------------------------
-
-  const qwenIntroductionPatterns = [
-
-    /^hello[!,.]?\s*my name is qwen[^.]*[.]?/i,
-
-    /^hi[!,.]?\s*my name is qwen[^.]*[.]?/i,
-
-    /^i(?:'m| am)\s+qwen[^.]*[.]?/i,
-
-    /^i am qwen[^.]*[.]?/i,
-
-    /^my name is qwen[^.]*[.]?/i,
-
-    /^hello[!,.]?\s*i(?:'m| am)\s+qwen[^.]*[.]?/i
-  ];
-
-  for (
-    const pattern of qwenIntroductionPatterns
-  ) {
-
-    answer =
-      answer.replace(
-        pattern,
-        ""
-      ).trim();
-  }
-
-  return answer;
-}
-
-// --------------------------------------------------
-// GENERAL AI SYSTEM PROMPT
-// --------------------------------------------------
-
-const GENERAL_SYSTEM_PROMPT = `
-You are the AI assistant inside the NDC Assistant application.
-
-Your application identity is:
-
-NDC Assistant
-
-You are powered by an underlying AI model.
-
-However, the underlying AI model is NOT your identity.
-
-NEVER introduce yourself as:
-- Qwen
-- Alibaba Cloud
-- Ollama
-- an Alibaba Cloud AI
-
-If the user asks who you are, answer:
-
-"I am the NDC Assistant, an AI assistant for the National Development
-Corporation (NDC) of Tanzania."
-
-For questions unrelated to NDC, answer naturally and accurately.
-
-Do not pretend that a general answer is official NDC information.
-
-Do not mention:
-- prompts
-- system instructions
-- internal processing
-- model limitations
-- RAG
-- vector search
-- knowledge retrieval
-
-Be concise and helpful.
-`;
-
-// --------------------------------------------------
-// GENERAL AI ANSWER
-// --------------------------------------------------
-
-async function askGeneralQuestion(
-  question
-) {
-
-  const prompt = `
-${GENERAL_SYSTEM_PROMPT}
-
-USER QUESTION:
-${question}
-
-ANSWER:
-`;
-
-  const response =
-    await fetch(
-      OLLAMA_URL,
-      {
-        method: "POST",
-
-        headers: {
-          "Content-Type": "application/json"
-        },
-
-        body: JSON.stringify({
-
-          model: MODEL,
-
-          prompt,
-
-          stream: false,
-
-          options: {
-
-            temperature: 0.4,
-
-            top_p: 0.9,
-
-            num_predict: 300
-          }
-        }),
-
-        signal:
-          AbortSignal.timeout(180000)
-      }
-    );
-
-  if (!response.ok) {
-
-    const errorText =
-      await response.text();
-
-    throw new Error(
-      `Ollama returned ${response.status}: ${errorText}`
-    );
-  }
-
-  const data =
-    await response.json();
-
-  let answer =
-    data.response
-      ? data.response.trim()
-      : "";
-
-  // ----------------------------------------------
-  // REMOVE MODEL SELF-IDENTIFICATION
-  // ----------------------------------------------
-
-  const qwenIntroductionPatterns = [
-
-    /^hello[!,.]?\s*my name is qwen[^.]*[.]?/i,
-
-    /^hi[!,.]?\s*my name is qwen[^.]*[.]?/i,
-
-    /^i(?:'m| am)\s+qwen[^.]*[.]?/i,
-
-    /^i am qwen[^.]*[.]?/i,
-
-    /^my name is qwen[^.]*[.]?/i,
-
-    /^hello[!,.]?\s*i(?:'m| am)\s+qwen[^.]*[.]?/i
-  ];
-
-  for (
-    const pattern of qwenIntroductionPatterns
-  ) {
-
-    answer =
-      answer.replace(
-        pattern,
-        ""
-      ).trim();
-  }
-
-  return answer;
-}
-
-// --------------------------------------------------
-// DETERMINE IF QUESTION IS PROBABLY NDC RELATED
-// --------------------------------------------------
+// ============================================================
+// NDC RELATED CHECK
+// ============================================================
 
 function isNDCRelated(question) {
+    const q = normalize(question);
 
-  const q =
-    normalize(question);
+    const keywords = [
+        "ndc",
+        "national development corporation",
+        "development corporation",
+        "liganga",
+        "mchuchuma",
+        "engaruka",
+        "maganga",
+        "matitu",
+        "katewaka",
+        "kmtc",
+        "tbpl",
+        "industrial park",
+        "industrial parks",
+        "industrial estate",
+        "investment",
+        "investor",
+        "investors",
+        "project",
+        "projects",
+        "tender",
+        "tenders",
+        "procurement",
+        "vacancy",
+        "vacancies",
+        "job",
+        "jobs",
+        "career",
+        "careers",
+        "managing director",
+        "director",
+        "board",
+        "organizational structure",
+        "organization structure",
+        "government organization",
+        "government institution",
+        "ministry",
+        "sido",
+        "tic",
+        "industrialization",
+        "manufacturing"
+    ];
 
-  const ndcWords = [
-
-    "ndc",
-
-    "national development corporation",
-
-    "liganga",
-
-    "mchuchuma",
-
-    "engaruka",
-
-    "tamco",
-
-    "kmtc",
-
-    "kilimanjaro machine",
-
-    "mang ula",
-
-    "tbpl",
-
-    "biolarvicide",
-
-    "kange",
-
-    "nyanza",
-
-    "kalunga",
-
-    "kihuhwi",
-
-    "industrial park",
-
-    "industrial estate",
-
-    "industrial area",
-
-    "ndc investor",
-
-    "ndc investment",
-
-    "ndc project",
-
-    "ndc tender",
-
-    "ndc job",
-
-    "ndc vacancy",
-
-    "managing director",
-    "director",
-    "board",
-    "government organization",
-    "government institution",
-    "ministry",
-    "tender",
-    "procurement",
-    "vacancy",
-    "career"
-  ];
-
-  return ndcWords.some(
-    word => q.includes(word)
-  );
+    return keywords.some(keyword => q.includes(keyword));
 }
 
-// --------------------------------------------------
+// ============================================================
+// SUGGESTIONS
+// ============================================================
+
+function getSuggestions(question) {
+    const q = normalize(question);
+
+    if (
+        q.includes("managing director") ||
+        q.includes("director") ||
+        q.includes("leadership")
+    ) {
+        return [
+            "What is NDC?",
+            "What does NDC do?",
+            "What is NDC's organizational structure?",
+            "Which ministry supervises NDC?"
+        ];
+    }
+
+    if (
+        q.includes("project") ||
+        q.includes("liganga") ||
+        q.includes("mchuchuma")
+    ) {
+        return [
+            "What is the Liganga project?",
+            "What is the Mchuchuma project?",
+            "What are NDC's major projects?",
+            "What are NDC's strategic projects?"
+        ];
+    }
+
+    if (
+        q.includes("investment") ||
+        q.includes("investor")
+    ) {
+        return [
+            "What investment opportunities does NDC offer?",
+            "How does NDC work with investors?",
+            "What industrial parks does NDC manage?",
+            "How can an investor work with NDC?"
+        ];
+    }
+
+    if (
+        q.includes("job") ||
+        q.includes("vacancy") ||
+        q.includes("career")
+    ) {
+        return [
+            "Does NDC have job opportunities?",
+            "Where can I find NDC vacancies?",
+            "What does NDC do?",
+            "Where is NDC headquarters?"
+        ];
+    }
+
+    return [
+        "What is NDC?",
+        "What does NDC do?",
+        "Who is the current Managing Director of NDC?",
+        "What are NDC's major projects?"
+    ];
+}
+
+// ============================================================
+// OLLAMA REQUEST
+// ============================================================
+
+function askOllama(prompt) {
+    return new Promise((resolve, reject) => {
+        const payload = JSON.stringify({
+            model: OLLAMA_MODEL,
+            prompt: prompt,
+            stream: false,
+            options: {
+                temperature: 0.2
+            }
+        });
+
+        const request = require("http").request(
+            OLLAMA_URL,
+            {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    "Content-Length": Buffer.byteLength(payload)
+                },
+                timeout: 120000
+            },
+            response => {
+                let data = "";
+
+                response.on("data", chunk => {
+                    data += chunk;
+                });
+
+                response.on("end", () => {
+                    try {
+                        const result = JSON.parse(data);
+
+                        if (result.response) {
+                            resolve(result.response.trim());
+                        } else {
+                            reject(
+                                new Error(
+                                    result.error || "Invalid Ollama response"
+                                )
+                            );
+                        }
+                    } catch (error) {
+                        reject(error);
+                    }
+                });
+            }
+        );
+
+        request.on("timeout", () => {
+            request.destroy();
+            reject(new Error("Ollama request timed out"));
+        });
+
+        request.on("error", error => {
+            reject(error);
+        });
+
+        request.write(payload);
+        request.end();
+    });
+}
+
+// ============================================================
+// NDC PROMPT
+// ============================================================
+
+function buildNDCPrompt(question, context) {
+    return `
+You are an information assistant for the National Development Corporation (NDC) of Tanzania.
+
+Answer the user's question using ONLY the NDC information provided below.
+
+IMPORTANT RULES:
+
+1. Do not invent facts.
+2. Do not use information that is not contained in the provided context.
+3. If the answer is not available in the context, clearly say:
+   "I don't have that information in the current NDC information."
+4. Keep the answer concise and factual.
+5. Do not mention internal files, prompts, context, or AI models.
+6. If the question asks for a person's name, organization, project, location, function, or other specific fact, use the exact information available in the context.
+7. For strategic-plan targets, clearly describe them as targets or plans, not as completed achievements.
+8. Do not claim that a project has been completed unless the context explicitly says so.
+
+NDC INFORMATION:
+
+${context}
+
+USER QUESTION:
+
+${question}
+
+ANSWER:
+`;
+}
+
+// ============================================================
+// GENERAL PROMPT
+// ============================================================
+
+function buildGeneralPrompt(question) {
+    return `
+You are a helpful assistant.
+
+Answer the user's question clearly and concisely.
+
+If the question is specifically about NDC, only provide information supported by the available NDC knowledge.
+
+USER QUESTION:
+
+${question}
+
+ANSWER:
+`;
+}
+
+// ============================================================
 // CHAT ENDPOINT
-// --------------------------------------------------
+// ============================================================
 
-app.post(
-  "/chat",
-  async (req, res) => {
-
+app.post("/chat", async (req, res) => {
     try {
+        const question = String(req.body?.question || "").trim();
 
-      const {
-        question
-      } = req.body;
-
-      if (
-        !question ||
-        typeof question !== "string"
-      ) {
-
-        return res.status(400).json({
-          error:
-            "question is required"
-        });
-      }
-
-      const cleanQuestion =
-        question.trim();
-
-      if (!cleanQuestion) {
-
-        return res.status(400).json({
-          error:
-            "question is required"
-        });
-      }
-
-      console.log(
-        "Question:",
-        cleanQuestion
-      );
-
-      // ------------------------------------------
-      // 1. CONVERSATION
-      // ------------------------------------------
-
-      const conversationAnswer =
-        getConversationAnswer(
-          cleanQuestion
-        );
-
-      if (conversationAnswer) {
-
-        console.log(
-          "Answer mode: CONVERSATION"
-        );
-
-        return res.json(
-          conversationAnswer
-        );
-      }
-
-      // ------------------------------------------
-      // 2. CONTACT
-      // ------------------------------------------
-
-      const contactAnswer =
-        getContactAnswer(
-          cleanQuestion
-        );
-
-      if (
-        contactAnswer &&
-        !requiresWebsiteVerification(
-          cleanQuestion
-        )
-      ) {
-
-        console.log(
-          "Answer mode: CONTACT"
-        );
-
-        return res.json(
-          contactAnswer
-        );
-      }
-
-      // ------------------------------------------
-      // 3. NDC KNOWLEDGE
-      // ------------------------------------------
-
-      if (
-        isNDCRelated(
-          cleanQuestion
-        )
-      ) {
-
-        const relevantKnowledge =
-          getSections(
-            cleanQuestion
-          );
-
-        const needsWebsite =
-          requiresWebsiteVerification(
-            cleanQuestion
-          );
-
-        // ----------------------------------------
-        // CURRENT INFORMATION
-        // ----------------------------------------
-        //
-        // For current information, check the
-        // official NDC website first.
-        //
-
-        if (needsWebsite) {
-
-          console.log(
-            "Answer mode: OFFICIAL NDC WEBSITE"
-          );
-
-          const websiteKnowledge =
-            await getWebsiteKnowledge(
-              cleanQuestion
-            );
-
-          if (websiteKnowledge) {
-
-            console.log(
-              "Official website information found:",
-              websiteKnowledge.length,
-              "characters"
-            );
-
-            const combinedKnowledge =
-              (
-                relevantKnowledge
-                  ? relevantKnowledge +
-                    "\n\n"
-                  : ""
-              ) +
-              websiteKnowledge;
-
-            const answer =
-              await askOllama(
-                cleanQuestion,
-                combinedKnowledge
-              );
-
-            const suggestions =
-              getSuggestions(
-                cleanQuestion,
-                answer,
-                combinedKnowledge
-              );
-
-            return res.json({
-
-              answer,
-
-              suggestions
+        if (!question) {
+            return res.status(400).json({
+                error: "Question is required"
             });
-          }
-
-          // Website could not verify it.
-          // Fall back to local knowledge if available.
-
-          if (relevantKnowledge) {
-
-            console.log(
-              "Official website unavailable. Using local NDC knowledge."
-            );
-
-            const answer =
-              await askOllama(
-                cleanQuestion,
-                relevantKnowledge
-              );
-
-            const suggestions =
-              getSuggestions(
-                cleanQuestion,
-                answer,
-                relevantKnowledge
-              );
-
-            return res.json({
-
-              answer,
-
-              suggestions
-            });
-          }
-
-          return res.json({
-
-            answer:
-              "I could not verify that information from the available NDC information.",
-
-            suggestions: [
-              "What is NDC?",
-              "What does NDC do?",
-              "What projects does NDC have?",
-              "How can I contact NDC?"
-            ]
-          });
         }
 
-        // ----------------------------------------
-        // NORMAL NDC INFORMATION
-        // ----------------------------------------
+        console.log("========================================");
+        console.log("Question:", question);
 
-        if (!relevantKnowledge) {
+        // ----------------------------------------------------
+        // CONVERSATIONAL ANSWERS
+        // ----------------------------------------------------
 
-          console.log(
-            "No local knowledge found. Checking official NDC website."
-          );
+        const conversationalAnswer =
+            getConversationalAnswer(question);
 
-          const websiteKnowledge =
-            await getWebsiteKnowledge(
-              cleanQuestion
-            );
-
-          if (websiteKnowledge) {
-
-            console.log(
-              "Answer mode: OFFICIAL NDC WEBSITE FALLBACK"
-            );
-
-            const answer =
-              await askOllama(
-                cleanQuestion,
-                websiteKnowledge
-              );
-
-            const suggestions =
-              getSuggestions(
-                cleanQuestion,
-                answer,
-                websiteKnowledge
-              );
+        if (conversationalAnswer) {
+            console.log("Answer mode: CONVERSATIONAL");
 
             return res.json({
-
-              answer,
-
-              suggestions
+                answer: conversationalAnswer,
+                suggestions: getSuggestions(question)
             });
-          }
-
-          return res.json({
-
-            answer:
-              "I could not verify that information from the available NDC information.",
-
-            suggestions: [
-              "What is NDC?",
-              "What does NDC do?",
-              "What projects does NDC have?",
-              "How can I contact NDC?"
-            ]
-          });
         }
 
-        console.log(
-          "Answer mode: NDC KNOWLEDGE"
-        );
+        // ----------------------------------------------------
+        // CONTACT ANSWERS
+        // ----------------------------------------------------
 
-        console.log(
-          "Relevant knowledge length:",
-          relevantKnowledge.length
-        );
+        const contactAnswer = getContactAnswer(question);
 
-        const answer =
-          await askOllama(
-            cleanQuestion,
-            relevantKnowledge
-          );
+        if (contactAnswer) {
+            console.log("Answer mode: CONTACT");
 
-        const suggestions =
-          getSuggestions(
-            cleanQuestion,
-            answer,
-            relevantKnowledge
-          );
+            return res.json({
+                answer: contactAnswer,
+                suggestions: getSuggestions(question)
+            });
+        }
+
+        // ----------------------------------------------------
+        // NDC QUESTION
+        // ----------------------------------------------------
+
+        if (isNDCRelated(question)) {
+            const selectedSections = getSections(question);
+
+            console.log(
+                "Selected sections:",
+                selectedSections
+            );
+
+            const context = buildContext(selectedSections);
+
+            console.log(
+                "Context length:",
+                context.length
+            );
+
+            if (!context || context.trim().length === 0) {
+                return res.json({
+                    answer:
+                        "I don't have that information in the current NDC information.",
+                    suggestions: getSuggestions(question)
+                });
+            }
+
+            console.log("Answer mode: NDC KNOWLEDGE");
+
+            const prompt = buildNDCPrompt(
+                question,
+                context
+            );
+
+            const answer = await askOllama(prompt);
+
+            return res.json({
+                answer,
+                suggestions: getSuggestions(question)
+            });
+        }
+
+        // ----------------------------------------------------
+        // GENERAL QUESTION
+        // ----------------------------------------------------
+
+        console.log("Answer mode: GENERAL AI");
+
+        const prompt = buildGeneralPrompt(question);
+
+        const answer = await askOllama(prompt);
 
         return res.json({
-
-          answer,
-
-          suggestions
+            answer,
+            suggestions: getSuggestions(question)
         });
-      }
-
-      // ------------------------------------------
-      // 4. GENERAL QUESTION
-      // ------------------------------------------
-
-      console.log(
-        "Answer mode: GENERAL AI"
-      );
-
-      const answer =
-        await askGeneralQuestion(
-          cleanQuestion
-        );
-
-      const suggestions = [
-
-        "What is NDC?",
-
-        "What projects does NDC have?",
-
-        "How can I become an NDC investor?",
-
-        "How can I contact NDC?"
-      ];
-
-      return res.json({
-
-        answer,
-
-        suggestions
-      });
 
     } catch (error) {
+        console.error("Chat error:", error);
 
-      console.error(
-        "Error:",
-        error
-      );
-
-      res.status(500).json({
-
-        error:
-          error.message
-      });
+        return res.status(500).json({
+            error: "Failed to process question",
+            details: error.message
+        });
     }
-  }
-);
+});
 
-// --------------------------------------------------
-// START HTTPS SERVER
-// --------------------------------------------------
+// ============================================================
+// HTTPS SERVER
+// ============================================================
+
+const certPath = path.join(__dirname, "cert");
+
+const httpsOptions = {
+    key: fs.readFileSync(
+        path.join(certPath, "server.key")
+    ),
+    cert: fs.readFileSync(
+        path.join(certPath, "server.crt")
+    )
+};
 
 https.createServer(
-  HTTPS_OPTIONS,
-  app
-).listen(
-  PORT,
-  "0.0.0.0",
-  () => {
-
-    console.log("");
-
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      "NDC ASSISTANT HTTPS SERVER"
-    );
-
-    console.log(
-      "================================="
-    );
-
-    console.log(
-      `https://95.111.255.86:${PORT}`
-    );
-
-    console.log(
-      `https://95.111.255.86:${PORT}/chat`
-    );
-
-    console.log(
-      "================================="
-    );
-
-    console.log("");
-  }
-);
+    httpsOptions,
+    app
+).listen(PORT, "0.0.0.0", () => {
+    console.log("========================================");
+    console.log("NDC Chatbot Backend Started");
+    console.log(`HTTPS server running on port ${PORT}`);
+    console.log(`Ollama model: ${OLLAMA_MODEL}`);
+    console.log(`Knowledge file: ${KNOWLEDGE_FILE}`);
+    console.log("Website checking: DISABLED");
+    console.log("========================================");
+});
