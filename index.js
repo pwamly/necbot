@@ -316,31 +316,41 @@ function getConversationAnswer(question) {
     };
   }
 
-  // ----------------------------------------------
-  // IDENTITY
-  // ----------------------------------------------
+    // ----------------------------------------------
+    // IDENTITY / ORIGIN
+    // ----------------------------------------------
 
-  if (
-    q === "who are you" ||
-    q === "what are you" ||
-    q === "tell me about yourself" ||
-    q === "who is this" ||
-    q === "what is your name"
-  ) {
+    const identityQuestion =
+      q === "who are you" ||
+      q === "what are you" ||
+      q === "who is this" ||
+      q === "what is your name" ||
+      q === "tell me about yourself" ||
+      q.includes("where are you from") ||
+      q.includes("where do you come from") ||
+      q.includes("which country are you from") ||
+      q.includes("what country are you from") ||
+      q.includes("are you from china") ||
+      q.includes("are you from alibaba") ||
+      q.includes("are you from alibaba cloud");
 
-    return {
+    if (identityQuestion) {
 
-      answer:
-        "I am the NDC Assistant, an AI assistant that provides information about the National Development Corporation (NDC) of Tanzania.",
+      return {
 
-      suggestions: [
-        "What is NDC?",
-        "What are NDC's main functions?",
-        "What projects does NDC have?",
-        "How can I contact NDC?"
-      ]
-    };
-  }
+        answer:
+          "I am the NDC Assistant, an AI assistant that provides information about the National Development Corporation (NDC) of Tanzania.",
+
+        suggestions: [
+          "What is NDC?",
+          "What does NDC do?",
+          "What projects does NDC have?",
+          "How can I contact NDC?"
+        ]
+      };
+    }
+
+
 
   // ----------------------------------------------
   // GOODBYE
