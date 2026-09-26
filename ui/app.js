@@ -148,11 +148,13 @@ function renderSuggestions(suggestions) {
    * Use both classes so the existing
    * .suggestions styling can be reused.
    */
-  
+
   container.className = "response-suggestions";
 
 
   suggestions.forEach((suggestion) => {
+
+    console.log("Rendering suggestion:.............", suggestion);
 
     const button =
       document.createElement("button");
