@@ -1,8 +1,9 @@
 const express = require("express");
 const fs = require("fs");
-const path = require("path");
 const https = require("https");
+const http = require("http");
 const cors = require("cors");
+const path = require("path");
 
 const app = express();
 
@@ -21,7 +22,7 @@ app.use(express.json({ limit: "1mb" }));
 
 /*
 ==================================================
-LOAD KNOWLEDGE BASE
+KNOWLEDGE BASE
 ==================================================
 */
 
@@ -35,7 +36,11 @@ function loadKnowledgeBase() {
             `Knowledge base loaded: ${knowledgeBase.length} characters`
         );
     } catch (error) {
-        console.error("Failed to load knowledge base:", error.message);
+        console.error(
+            "Failed to load knowledge base:",
+            error.message
+        );
+
         knowledgeBase = "";
     }
 }
@@ -46,11 +51,6 @@ loadKnowledgeBase();
 ==================================================
 NDC MANAGEMENT DIRECTORY
 ==================================================
-
-These are structured facts.
-
-Do NOT let the LLM determine names for these
-questions because small models can hallucinate.
 */
 
 const NDC_MANAGEMENT = [
@@ -117,12 +117,17 @@ function normalize(text) {
 
 /*
 ==================================================
-ESCAPE REGEX
+NORMALIZE PERSON NAME
 ==================================================
 */
 
-function escapeRegex(text) {
-    return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function normalizeName(text) {
+    return normalize(text)
+        .replace(/^mr\s+/i, "")
+        .replace(/^mrs\s+/i, "")
+        .replace(/^ms\s+/i, "")
+        .replace(/^dr\s+/i, "")
+        .trim();
 }
 
 /*
@@ -180,8 +185,7 @@ const SECTION_KEYWORDS = {
         "what is ndc",
         "what does ndc stand for",
         "meaning of ndc",
-        "ndc meaning",
-        "ndc"
+        "ndc meaning"
     ],
 
     "3": [
@@ -194,9 +198,7 @@ const SECTION_KEYWORDS = {
 
     "5": [
         "purpose",
-        "main purpose",
-        "why does ndc exist",
-        "what is the purpose"
+        "main purpose"
     ],
 
     "6": [
@@ -252,8 +254,7 @@ const SECTION_KEYWORDS = {
         "investors",
         "investment process",
         "work with investors",
-        "partner with ndc",
-        "partnership"
+        "partner with ndc"
     ],
 
     "11": [
@@ -283,7 +284,6 @@ const SECTION_KEYWORDS = {
         "tender",
         "tenders",
         "procurement",
-        "rpf",
         "rfp",
         "eoi",
         "expression of interest",
@@ -372,7 +372,6 @@ const SECTION_KEYWORDS = {
     ],
 
     "23": [
-        "question",
         "questions"
     ],
 
@@ -386,34 +385,12 @@ const SECTION_KEYWORDS = {
         "address",
         "phone",
         "email"
-    ],
-
-    "26": [
-        "short description",
-        "short description of ndc"
-    ],
-
-    "27": [
-        "one sentence",
-        "one-sentence",
-        "describe ndc"
-    ],
-
-    "28": [
-        "project list",
-        "list of projects"
-    ],
-
-    "29": [
-        "keyword",
-        "keywords",
-        "rag"
     ]
 };
 
 /*
 ==================================================
-GET SECTIONS
+GET RELEVANT SECTIONS
 ==================================================
 */
 
@@ -434,29 +411,22 @@ function getSections(question) {
     }
 
     /*
-     * Management/person questions should always include
-     * Section 15.
+     * Always include management section for management
+     * related questions.
      */
-    if (
+    const managementQuestion =
+        q.includes("management") ||
         q.includes("managing director") ||
+        q.includes("director") ||
+        q.includes("directors") ||
+        q.includes("manager") ||
         q.includes("corporate secretary") ||
         q.includes("internal auditor") ||
-        q.includes("director of finance") ||
-        q.includes("director of planning") ||
-        q.includes("director of heavy industries") ||
-        q.includes("director of strategic value addition") ||
-        q.includes("investment manager") ||
-        q.includes("procurement manager") ||
-        q.includes("human resources") ||
-        q.includes("communication affairs") ||
-        q.includes("who is the director") ||
-        q.includes("who is the managing director") ||
-        q.includes("management") ||
-        q.includes("organizational structure")
-    ) {
-        if (!matched.includes("15")) {
-            matched.push("15");
-        }
+        q.includes("organizational structure") ||
+        q.includes("organization structure");
+
+    if (managementQuestion && !matched.includes("15")) {
+        matched.push("15");
     }
 
     return [...new Set(matched)];
@@ -480,17 +450,14 @@ function buildContext(question) {
             continue;
         }
 
-        context += `\n==================================================\n`;
-        context += `${section.number}. ${section.title}\n`;
-        context += `==================================================\n`;
-        context += `${section.content}\n`;
+        context += `
+==================================================
+${section.number}. ${section.title}
+==================================================
+${section.content}
+`;
     }
 
-    /*
-     * If no sections were detected, use the entire KB.
-     * This allows Ollama to answer questions that don't
-     * match the keyword list exactly.
-     */
     if (!context.trim()) {
         context = knowledgeBase;
     }
@@ -500,47 +467,88 @@ function buildContext(question) {
 
 /*
 ==================================================
-MANAGEMENT QUESTION HELPERS
+PERSON / MANAGEMENT DETECTION
 ==================================================
 */
 
-function isWhoQuestion(q) {
+function isWhoQuestion(question) {
+    const q = normalize(question);
+
     return (
         q.includes("who is") ||
         q.includes("who are") ||
         q.includes("whos") ||
+        q.includes("who's") ||
         q.includes("name of") ||
-        q.includes("person") ||
-        q.includes("holder")
+        q.includes("which person")
     );
 }
 
 /*
 ==================================================
-GET MANAGEMENT ANSWER
+FIND PERSON BY NAME
 ==================================================
-
-This function handles known management positions
-directly instead of sending them to the LLM.
 */
 
-function getManagementAnswer(question) {
-    const q = normalize(question);
+function findManagementPerson(question) {
+    const q = normalizeName(question);
 
-    /*
-     * Only use deterministic management lookup when
-     * the user is asking for a person/name.
-     */
-    if (!isWhoQuestion(q)) {
+    for (const person of NDC_MANAGEMENT) {
+        const fullName = normalizeName(person.name);
+
+        if (
+            q.includes(fullName) ||
+            fullName.includes(q)
+        ) {
+            return person;
+        }
+    }
+
+    return null;
+}
+
+/*
+==================================================
+ANSWER PERSON QUESTION
+==================================================
+*/
+
+function getPersonAnswer(question) {
+    if (!isWhoQuestion(question)) {
         return null;
     }
 
-    /*
-     * Exact / near-exact position matching.
-     */
+    const person = findManagementPerson(question);
+
+    if (!person) {
+        return null;
+    }
+
+    return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
+}
+
+/*
+==================================================
+ANSWER POSITION QUESTION
+==================================================
+*/
+
+function getPositionAnswer(question) {
+    if (!isWhoQuestion(question)) {
+        return null;
+    }
+
+    const q = normalize(question);
+
     for (const person of NDC_MANAGEMENT) {
         const position = normalize(person.position);
 
+        /*
+         * Exact position match.
+         *
+         * This is important because the answer must come
+         * from the management directory, NOT Ollama.
+         */
         if (q.includes(position)) {
             return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
         }
@@ -553,36 +561,13 @@ function getManagementAnswer(question) {
     if (
         q.includes("managing director") ||
         q.includes("head of ndc") ||
-        q.includes("who leads ndc") ||
-        q.includes("leader of ndc")
+        q.includes("who leads ndc")
     ) {
         const person = NDC_MANAGEMENT.find(
             item => item.position === "Managing Director"
         );
 
-        return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
-    }
-
-    if (
-        q.includes("corporate secretary") ||
-        q.includes("secretary of ndc")
-    ) {
-        const person = NDC_MANAGEMENT.find(
-            item => item.position === "Corporate Secretary"
-        );
-
-        return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
-    }
-
-    if (
-        q.includes("chief internal auditor") ||
-        q.includes("internal auditor")
-    ) {
-        const person = NDC_MANAGEMENT.find(
-            item => item.position === "Chief Internal Auditor"
-        );
-
-        return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
+        return `${person.name} is the person serving as Managing Director of the National Development Corporation (NDC).`;
     }
 
     if (
@@ -614,7 +599,9 @@ function getManagementAnswer(question) {
         q.includes("director heavy industries")
     ) {
         const person = NDC_MANAGEMENT.find(
-            item => item.position === "Director of Heavy Industries"
+            item =>
+                item.position ===
+                "Director of Heavy Industries"
         );
 
         return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
@@ -633,12 +620,31 @@ function getManagementAnswer(question) {
         return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
     }
 
-    if (
-        q.includes("investment manager") ||
-        q.includes("manager investment")
-    ) {
+    if (q.includes("chief internal auditor")) {
         const person = NDC_MANAGEMENT.find(
-            item => item.position === "Investment Manager"
+            item =>
+                item.position ===
+                "Chief Internal Auditor"
+        );
+
+        return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
+    }
+
+    if (q.includes("corporate secretary")) {
+        const person = NDC_MANAGEMENT.find(
+            item =>
+                item.position ===
+                "Corporate Secretary"
+        );
+
+        return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
+    }
+
+    if (q.includes("investment manager")) {
+        const person = NDC_MANAGEMENT.find(
+            item =>
+                item.position ===
+                "Investment Manager"
         );
 
         return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
@@ -646,19 +652,20 @@ function getManagementAnswer(question) {
 
     if (
         q.includes("procurement manager") ||
-        q.includes("manager procurement")
+        q.includes("manager of procurement")
     ) {
         const person = NDC_MANAGEMENT.find(
-            item => item.position === "Manager of Procurement Management"
+            item =>
+                item.position ===
+                "Manager of Procurement Management"
         );
 
         return `${person.name} is the ${person.position} of the National Development Corporation (NDC).`;
     }
 
     if (
-        q.includes("administration manager") ||
         q.includes("human resources manager") ||
-        q.includes("hr manager")
+        q.includes("administration manager")
     ) {
         const person = NDC_MANAGEMENT.find(
             item =>
@@ -670,9 +677,8 @@ function getManagementAnswer(question) {
     }
 
     if (
-        q.includes("communication manager") ||
-        q.includes("communications manager") ||
-        q.includes("communication affairs")
+        q.includes("communication affairs") ||
+        q.includes("communication manager")
     ) {
         const person = NDC_MANAGEMENT.find(
             item =>
@@ -684,53 +690,48 @@ function getManagementAnswer(question) {
     }
 
     /*
-     * "Who is the director of NDC?"
-     *
-     * This wording is ambiguous because NDC has multiple
-     * director-level positions. We should not invent a
-     * position. Use the Managing Director only when the
-     * wording clearly means the head of NDC.
+     * "Director of NDC" is ambiguous because there are
+     * multiple director positions.
      */
     if (
         q === "who is the director of ndc" ||
-        q === "who is director of ndc" ||
-        q === "the director of ndc"
+        q === "who is director of ndc"
     ) {
         const person = NDC_MANAGEMENT.find(
-            item => item.position === "Managing Director"
+            item =>
+                item.position ===
+                "Managing Director"
         );
 
-        return `${person.name} is the Managing Director of the National Development Corporation (NDC), which is the organization's head.`;
+        return `${person.name} is the Managing Director of the National Development Corporation (NDC).`;
     }
 
-    /*
-     * No known management position found.
-     */
     return null;
 }
 
 /*
 ==================================================
-GET ALL MANAGEMENT
+LIST MANAGEMENT
 ==================================================
 */
 
-function getAllManagementAnswer(question) {
+function getManagementListAnswer(question) {
     const q = normalize(question);
 
     const asksForList =
-        q.includes("all management") ||
-        q.includes("all managers") ||
         q.includes("management team") ||
-        q.includes("management members") ||
-        q.includes("list of management") ||
-        q.includes("list the management") ||
-        q.includes("who are the management") ||
-        q.includes("who are the managers") ||
-        q.includes("directors of ndc") ||
-        q.includes("ndc management") ||
         q.includes("management structure") ||
-        q.includes("organizational structure");
+        q.includes("organizational structure") ||
+        q.includes("organization structure") ||
+        q.includes("list all directors") ||
+        q.includes("list the directors") ||
+        q.includes("list all management") ||
+        q.includes("list the management") ||
+        q.includes("all directors") ||
+        q.includes("all managers") ||
+        q.includes("who are the directors") ||
+        q.includes("who are the management") ||
+        q.includes("management members");
 
     if (!asksForList) {
         return null;
@@ -748,7 +749,66 @@ function getAllManagementAnswer(question) {
 
 /*
 ==================================================
-DETECT GREETINGS
+IS NDC RELATED?
+==================================================
+*/
+
+function isNDCRelated(question) {
+    const q = normalize(question);
+
+    /*
+     * First check whether the question contains one of
+     * the known management people.
+     */
+    for (const person of NDC_MANAGEMENT) {
+        const name = normalizeName(person.name);
+
+        if (q.includes(name)) {
+            return true;
+        }
+    }
+
+    const keywords = [
+        "ndc",
+        "national development corporation",
+        "liganga",
+        "mchuchuma",
+        "engaruka",
+        "tamco",
+        "kmtc",
+        "nyanza industrial",
+        "kange industrial",
+        "industrial park",
+        "industrial estate",
+        "industrial project",
+        "industrialization",
+        "investment",
+        "investor",
+        "investors",
+        "tender",
+        "tenders",
+        "procurement",
+        "vacancy",
+        "vacancies",
+        "jobs",
+        "career",
+        "managing director",
+        "director",
+        "manager",
+        "corporate secretary",
+        "internal auditor",
+        "sido",
+        "tic"
+    ];
+
+    return keywords.some(keyword =>
+        q.includes(keyword)
+    );
+}
+
+/*
+==================================================
+CONVERSATIONAL ANSWERS
 ==================================================
 */
 
@@ -764,14 +824,12 @@ function isGreeting(question) {
         "good evening",
         "mambo",
         "habari"
-    ].some(greeting => q === greeting || q.startsWith(`${greeting} `));
+    ].some(
+        greeting =>
+            q === greeting ||
+            q.startsWith(`${greeting} `)
+    );
 }
-
-/*
-==================================================
-DETECT THANKS
-==================================================
-*/
 
 function isThanks(question) {
     const q = normalize(question);
@@ -785,12 +843,6 @@ function isThanks(question) {
     );
 }
 
-/*
-==================================================
-DETECT GOODBYE
-==================================================
-*/
-
 function isGoodbye(question) {
     const q = normalize(question);
 
@@ -801,12 +853,6 @@ function isGoodbye(question) {
         q === "see you later"
     );
 }
-
-/*
-==================================================
-DETECT IDENTITY
-==================================================
-*/
 
 function isIdentityQuestion(question) {
     const q = normalize(question);
@@ -821,12 +867,6 @@ function isIdentityQuestion(question) {
     );
 }
 
-/*
-==================================================
-DETECT CAPABILITY QUESTION
-==================================================
-*/
-
 function isCapabilityQuestion(question) {
     const q = normalize(question);
 
@@ -838,19 +878,13 @@ function isCapabilityQuestion(question) {
     );
 }
 
-/*
-==================================================
-CONVERSATIONAL ANSWERS
-==================================================
-*/
-
 function getConversationalAnswer(question) {
     if (isGreeting(question)) {
         return "Hello! I can help you with information about the National Development Corporation (NDC), including its functions, projects, investment opportunities, management, and contact information.";
     }
 
     if (isThanks(question)) {
-        return "You're welcome! Feel free to ask if you have another question about NDC.";
+        return "You're welcome! Feel free to ask another question about NDC.";
     }
 
     if (isGoodbye(question)) {
@@ -858,7 +892,7 @@ function getConversationalAnswer(question) {
     }
 
     if (isIdentityQuestion(question)) {
-        return "I am an information assistant for the National Development Corporation (NDC). I provide information based on the available NDC information.";
+        return "I am an information assistant for the National Development Corporation (NDC).";
     }
 
     if (isCapabilityQuestion(question)) {
@@ -870,7 +904,7 @@ function getConversationalAnswer(question) {
 
 /*
 ==================================================
-CONTACT QUESTIONS
+CONTACT ANSWER
 ==================================================
 */
 
@@ -892,59 +926,13 @@ function getContactAnswer(question) {
         return null;
     }
 
-    const section =
-        sections["1"] ||
-        sections["25"];
+    const section = sections["1"];
 
     if (!section) {
         return null;
     }
 
     return section.content;
-}
-
-/*
-==================================================
-NDC RELATED CHECK
-==================================================
-*/
-
-function isNDCRelated(question) {
-    const q = normalize(question);
-
-    const keywords = [
-        "ndc",
-        "national development corporation",
-        "liganga",
-        "mchuchuma",
-        "engaruka",
-        "tamco",
-        "kmtc",
-        "nyanza industrial",
-        "kange industrial",
-        "industrial park",
-        "industrial estate",
-        "industrial project",
-        "industrialization",
-        "investment",
-        "investor",
-        "investors",
-        "tender",
-        "procurement",
-        "vacancy",
-        "vacancies",
-        "jobs",
-        "career",
-        "managing director",
-        "director",
-        "manager",
-        "corporate secretary",
-        "internal auditor",
-        "sidO",
-        "tic"
-    ];
-
-    return keywords.some(keyword => q.includes(keyword));
 }
 
 /*
@@ -957,15 +945,14 @@ function getSuggestions(question) {
     const q = normalize(question);
 
     if (
-        q.includes("managing director") ||
         q.includes("director") ||
         q.includes("manager") ||
         q.includes("management")
     ) {
         return [
+            "Who is the Managing Director of NDC?",
             "Who is the Director of Finance?",
             "Who is the Director of Heavy Industries?",
-            "Who is the Director of Strategic Value Addition?",
             "Show me the NDC management team"
         ];
     }
@@ -997,19 +984,6 @@ function getSuggestions(question) {
         ];
     }
 
-    if (
-        q.includes("job") ||
-        q.includes("vacancy") ||
-        q.includes("career")
-    ) {
-        return [
-            "What types of jobs does NDC have?",
-            "What areas can I work in at NDC?",
-            "Where is NDC located?",
-            "How can I contact NDC?"
-        ];
-    }
-
     return [
         "What is NDC?",
         "What does NDC do?",
@@ -1020,7 +994,7 @@ function getSuggestions(question) {
 
 /*
 ==================================================
-BUILD NDC PROMPT
+OLLAMA PROMPT
 ==================================================
 */
 
@@ -1034,41 +1008,28 @@ IMPORTANT RULES:
 
 1. Do not invent facts.
 
-2. Do not use information that is not contained in the provided NDC information.
+2. Do not invent names.
 
-3. If the answer is not available in the provided information, say:
+3. Do not invent job titles.
+
+4. Do not invent departments.
+
+5. Do not invent projects.
+
+6. If the answer is not available, say:
 "I don't have that information in the current NDC information."
 
-4. Keep the answer concise, clear and factual.
+7. Keep the answer concise and factual.
 
-5. Do not mention internal files, prompts, retrieval, context, or AI models.
+8. Do not mention internal files, prompts, retrieval, context, or AI models.
 
-6. Do not create names, job titles, departments, projects, dates, tender numbers, vacancies, fees, deadlines, or requirements.
+9. A person's name and their position must match exactly with the provided information.
 
-7. A person and a job title are different things.
+10. Do not assign one person to another person's position.
 
-8. If the information says:
-"Dr. Nicolaus H. Shombe – Managing Director"
-and the user asks:
-"Who is the Managing Director of NDC?"
-answer:
-"Dr. Nicolaus H. Shombe is the Managing Director of the National Development Corporation (NDC)."
+11. Do not create additional management positions.
 
-9. If a person's name and position are explicitly present in the information, do not say that the name is missing.
-
-10. Do not create additional management positions that are not explicitly listed.
-
-11. Do not assume that every project listed is operational.
-
-12. Distinguish between projects, strategic plans, targets, opportunities, and completed achievements.
-
-13. If a strategic plan contains a future target, describe it as a target or plan rather than an achieved result.
-
-14. If the user asks for current tenders, current vacancies, or other information that requires a current announcement, do not invent current details.
-
-15. If the question is ambiguous, give only information supported by the provided NDC information.
-
-16. Never make up an answer simply because the question expects a name.
+12. Do not claim that a project is operational unless the provided information explicitly says so.
 
 NDC INFORMATION:
 
@@ -1084,7 +1045,7 @@ ANSWER:
 
 /*
 ==================================================
-OLLAMA REQUEST
+ASK OLLAMA
 ==================================================
 */
 
@@ -1103,7 +1064,7 @@ function askOllama(prompt) {
 
         const url = new URL(OLLAMA_URL);
 
-        const request = require("http").request(
+        const request = http.request(
             {
                 hostname: url.hostname,
                 port: url.port,
@@ -1123,7 +1084,10 @@ function askOllama(prompt) {
 
                 response.on("end", () => {
                     try {
-                        if (response.statusCode < 200 || response.statusCode >= 300) {
+                        if (
+                            response.statusCode < 200 ||
+                            response.statusCode >= 300
+                        ) {
                             return reject(
                                 new Error(
                                     `Ollama returned HTTP ${response.statusCode}: ${data}`
@@ -1133,7 +1097,9 @@ function askOllama(prompt) {
 
                         const parsed = JSON.parse(data);
 
-                        resolve(parsed.response || "");
+                        resolve(
+                            parsed.response || ""
+                        );
                     } catch (error) {
                         reject(error);
                     }
@@ -1150,7 +1116,7 @@ function askOllama(prompt) {
 
 /*
 ==================================================
-CLEAN OLLAMA RESPONSE
+CLEAN ANSWER
 ==================================================
 */
 
@@ -1161,7 +1127,10 @@ function cleanAnswer(answer) {
 
     let cleaned = answer.trim();
 
-    cleaned = cleaned.replace(/^answer:\s*/i, "");
+    cleaned = cleaned.replace(
+        /^answer:\s*/i,
+        ""
+    );
 
     cleaned = cleaned.replace(
         /^based on the (provided|available) (information|context)[,:]?\s*/i,
@@ -1195,15 +1164,15 @@ app.post("/chat", async (req, res) => {
         console.log("Question:", question);
 
         /*
-         * ----------------------------------------
-         * 1. Conversational answers
-         * ----------------------------------------
+         * 1. Normal conversation
          */
         const conversationalAnswer =
             getConversationalAnswer(question);
 
         if (conversationalAnswer) {
-            console.log("Answer mode: CONVERSATIONAL");
+            console.log(
+                "Answer mode: CONVERSATIONAL"
+            );
 
             return res.json({
                 answer: conversationalAnswer,
@@ -1212,14 +1181,15 @@ app.post("/chat", async (req, res) => {
         }
 
         /*
-         * ----------------------------------------
-         * 2. Contact information
-         * ----------------------------------------
+         * 2. Contact
          */
-        const contactAnswer = getContactAnswer(question);
+        const contactAnswer =
+            getContactAnswer(question);
 
         if (contactAnswer) {
-            console.log("Answer mode: CONTACT");
+            console.log(
+                "Answer mode: CONTACT"
+            );
 
             return res.json({
                 answer: contactAnswer,
@@ -1228,46 +1198,70 @@ app.post("/chat", async (req, res) => {
         }
 
         /*
-         * ----------------------------------------
-         * 3. ALL MANAGEMENT
-         * ----------------------------------------
+         * 3. Complete management list
          */
-        const allManagementAnswer =
-            getAllManagementAnswer(question);
+        const managementListAnswer =
+            getManagementListAnswer(question);
 
-        if (allManagementAnswer) {
-            console.log("Answer mode: MANAGEMENT DIRECTORY");
+        if (managementListAnswer) {
+            console.log(
+                "Answer mode: MANAGEMENT LIST"
+            );
 
             return res.json({
-                answer: allManagementAnswer,
+                answer: managementListAnswer,
                 suggestions: getSuggestions(question)
             });
         }
 
         /*
-         * ----------------------------------------
-         * 4. INDIVIDUAL MANAGEMENT PERSON
-         * ----------------------------------------
+         * 4. Person lookup
+         *
+         * Example:
+         * "Who is Mr. Mafutah Bunini?"
          */
-        const managementAnswer =
-            getManagementAnswer(question);
+        const personAnswer =
+            getPersonAnswer(question);
 
-        if (managementAnswer) {
-            console.log("Answer mode: MANAGEMENT DIRECTORY");
+        if (personAnswer) {
+            console.log(
+                "Answer mode: MANAGEMENT PERSON"
+            );
 
             return res.json({
-                answer: managementAnswer,
+                answer: personAnswer,
                 suggestions: getSuggestions(question)
             });
         }
 
         /*
-         * ----------------------------------------
-         * 5. Check whether question relates to NDC
-         * ----------------------------------------
+         * 5. Position lookup
+         *
+         * Example:
+         * "Who is the Director of Planning,
+         * Research and Development?"
+         */
+        const positionAnswer =
+            getPositionAnswer(question);
+
+        if (positionAnswer) {
+            console.log(
+                "Answer mode: MANAGEMENT POSITION"
+            );
+
+            return res.json({
+                answer: positionAnswer,
+                suggestions: getSuggestions(question)
+            });
+        }
+
+        /*
+         * 6. NDC check
          */
         if (!isNDCRelated(question)) {
-            console.log("Answer mode: OUTSIDE NDC");
+            console.log(
+                "Answer mode: OUTSIDE NDC"
+            );
 
             return res.json({
                 answer:
@@ -1277,11 +1271,10 @@ app.post("/chat", async (req, res) => {
         }
 
         /*
-         * ----------------------------------------
-         * 6. Retrieve relevant company.txt sections
-         * ----------------------------------------
+         * 7. Retrieve relevant company.txt
          */
-        const context = buildContext(question);
+        const context =
+            buildContext(question);
 
         console.log(
             "Relevant sections:",
@@ -1289,48 +1282,52 @@ app.post("/chat", async (req, res) => {
         );
 
         /*
-         * ----------------------------------------
-         * 7. Build prompt
-         * ----------------------------------------
+         * 8. Ollama
          */
-        const prompt = buildNDCPrompt(
-            question,
-            context
+        const prompt =
+            buildNDCPrompt(
+                question,
+                context
+            );
+
+        console.log(
+            "Answer mode: OLLAMA"
         );
 
-        /*
-         * ----------------------------------------
-         * 8. Ask Ollama
-         * ----------------------------------------
-         */
-        console.log("Answer mode: OLLAMA");
+        const rawAnswer =
+            await askOllama(prompt);
 
-        const rawAnswer = await askOllama(prompt);
-
-        const answer = cleanAnswer(rawAnswer);
+        const answer =
+            cleanAnswer(rawAnswer);
 
         if (!answer) {
             return res.json({
                 answer:
                     "I don't have that information in the current NDC information.",
-                suggestions: getSuggestions(question)
+                suggestions:
+                    getSuggestions(question)
             });
         }
 
         return res.json({
             answer,
-            suggestions: getSuggestions(question)
+            suggestions:
+                getSuggestions(question)
         });
 
     } catch (error) {
-        console.error("Chat error:", error);
+        console.error(
+            "Chat error:",
+            error
+        );
 
         return res.status(500).json({
             answer:
                 "Sorry, I could not process your question at the moment.",
-            suggestions: getSuggestions(
-                req.body?.question || ""
-            )
+            suggestions:
+                getSuggestions(
+                    req.body?.question || ""
+                )
         });
     }
 });
@@ -1346,7 +1343,12 @@ app.get("/health", (req, res) => {
         status: "ok",
         service: "NDC Chatbot",
         model: OLLAMA_MODEL,
-        knowledgeBaseLoaded: Boolean(knowledgeBase)
+        knowledgeBaseLoaded:
+            Boolean(knowledgeBase),
+        managementDirectory:
+            NDC_MANAGEMENT.length,
+        websiteChecking:
+            false
     });
 });
 
@@ -1356,11 +1358,21 @@ HTTPS SERVER
 ==================================================
 */
 
-if (!fs.existsSync(SSL_KEY) || !fs.existsSync(SSL_CERT)) {
-    console.error("SSL certificate files not found.");
-    console.error("Expected:");
+if (
+    !fs.existsSync(SSL_KEY) ||
+    !fs.existsSync(SSL_CERT)
+) {
+    console.error(
+        "SSL certificate files not found."
+    );
+
+    console.error(
+        "Expected:"
+    );
+
     console.error(SSL_KEY);
     console.error(SSL_CERT);
+
     process.exit(1);
 }
 
@@ -1369,18 +1381,53 @@ const sslOptions = {
     cert: fs.readFileSync(SSL_CERT)
 };
 
-https.createServer(sslOptions, app).listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-        console.log("==========================================");
-        console.log("NDC Chatbot Server Started");
-        console.log("==========================================");
-        console.log(`HTTPS Port: ${PORT}`);
-        console.log(`Model: ${OLLAMA_MODEL}`);
-        console.log(`Knowledge: ${KNOWLEDGE_FILE}`);
-        console.log("Website checking: DISABLED");
-        console.log("Management lookup: ENABLED");
-        console.log("==========================================");
-    }
-);
+https
+    .createServer(
+        sslOptions,
+        app
+    )
+    .listen(
+        PORT,
+        "0.0.0.0",
+        () => {
+            console.log(
+                "=========================================="
+            );
+
+            console.log(
+                "NDC Chatbot Server Started"
+            );
+
+            console.log(
+                "=========================================="
+            );
+
+            console.log(
+                `HTTPS Port: ${PORT}`
+            );
+
+            console.log(
+                `Model: ${OLLAMA_MODEL}`
+            );
+
+            console.log(
+                `Knowledge: ${KNOWLEDGE_FILE}`
+            );
+
+            console.log(
+                "Website checking: DISABLED"
+            );
+
+            console.log(
+                "Management directory: ENABLED"
+            );
+
+            console.log(
+                `Management records: ${NDC_MANAGEMENT.length}`
+            );
+
+            console.log(
+                "=========================================="
+            );
+        }
+    );
